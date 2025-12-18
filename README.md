@@ -1,340 +1,133 @@
-# 🎓 Hệ Thống Phân Loại Sinh Viên
+# 🎓 Hệ Thống Phân Loại & Chấm Điểm Sinh Viên Tích Hợp
 
-## 📊 Tổng Quan
+Hệ thống phân loại sinh viên thông minh sử dụng **K-means + KNN + Chuẩn hóa dữ liệu** kết hợp với **hệ thống chấm điểm tích hợp** để đánh giá toàn diện sinh viên dựa trên điểm số, hành vi và kỹ năng.
 
-Hệ thống phân loại sinh viên thông minh sử dụng **K-means + KNN + Chuẩn hóa dữ liệu** để đánh giá và phân loại sinh viên thành 4 mức độ: Xuất sắc, Khá, Trung bình, Yếu.
+## 📋 Tính Năng Chính
 
-### ✨ Kiến Trúc Hệ Thống
+- **Phân loại tự động**: K-means phân cụm + KNN dự đoán → 4 mức: Xuất sắc, Khá, Trung bình, Yếu
+- **Chấm điểm tích hợp**: Kết hợp điểm bài tập (30%) + Giữa kỳ (30%) + Cuối kỳ (40%)
+- **Phát hiện bất thường**: Tự động phát hiện gian lận (điểm cao + thời gian ngắn + vắng nhiều)
+- **Đánh giá kỹ năng**: 4 kỹ năng/môn học × 4 môn = 16 kỹ năng được đánh giá
+- **Sync Supabase**: Lưu trữ và đồng bộ dữ liệu lên cloud
+
+## 🏗️ Kiến Trúc Hệ Thống
 
 ```
-Dữ liệu sinh viên (201 sinh viên)
+Dữ liệu sinh viên (Supabase)
          ↓
-BƯỚC 1: CHUẨN HÓA DỮ LIỆU
-├─ MinMax: (x - min) / (max - min) → [0, 1]
-├─ ZScore: (x - mean) / std → Mean=0, Std=1
-└─ Robust: (x - median) / IQR → Chống nhiễu
+[1] CHUẨN HÓA DỮ LIỆU
+    ├─ MinMax: (x - min) / (max - min) → [0, 1]
+    ├─ ZScore: (x - mean) / std
+    └─ Robust: (x - median) / IQR
          ↓
-BƯỚC 2: K-MEANS PHÂN CỤM (Unsupervised)
-├─ Phân thành 4 cụm dựa trên điểm số và hành vi
-├─ Tự động gán nhãn: Xuất sắc, Khá, TB, Yếu
-└─ Tạo nhãn ban đầu cho KNN
+[2] K-MEANS PHÂN CỤM (Unsupervised)
+    ├─ 12 features: điểm số + hành vi
+    ├─ Phân thành 4 cụm
+    └─ Gán nhãn theo điểm tổng hợp
          ↓
-BƯỚC 3: KNN HỌC VÀ TINH CHỈNH (Supervised)
-├─ Học từ nhãn K-means
-├─ Xử lý trường hợp biên
-└─ Độ chính xác: 100%
+[3] KNN DỰ ĐOÁN (Supervised)
+    ├─ Học từ nhãn K-means
+    └─ Dự đoán cho sinh viên mới
          ↓
-BƯỚC 4: PHÁT HIỆN BẤT THƯỜNG
-├─ Điểm cao + Thời gian ngắn = Gian lận
-└─ Điều chỉnh phân loại nếu phát hiện
+[4] PHÁT HIỆN BẤT THƯỜNG
+    ├─ Điểm cao + Thời gian ngắn
+    ├─ Điểm cao + Vắng nhiều
+    └─ Nộp muộn nhiều
          ↓
-    KẾT QUẢ CUỐI CÙNG
+[5] ĐIỂM TÍCH HỢP
+    ├─ Bài tập: 30%
+    ├─ Giữa kỳ: 30%
+    └─ Cuối kỳ: 40%
+         ↓
+    KẾT QUẢ PHÂN LOẠI
 ```
 
-## 🚀 Chạy Hệ Thống
+## 🚀 Cài Đặt & Chạy
 
-### 1. Cài Đặt
+### 1. Cài đặt dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Setup Supabase (Chỉ làm 1 lần)
-```
-1. Truy cập: https://odmtndvllclmrwczcyvs.supabase.co
-2. Vào SQL Editor
-3. Chạy file: supabase_all_in_one.sql
+### 2. Cấu hình Supabase
+Tạo file `.env`:
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-anon-key
 ```
 
-### 3. Chạy Server
+### 3. Chạy server
 ```bash
 python app.py
 ```
 
-Server sẽ:
-- ✅ Tự động phân loại sinh viên
-- ✅ Tự động sync dữ liệu lên Supabase
-- ✅ Chạy tại: **http://localhost:5000**
-
-**Xem hướng dẫn chi tiết:** [HUONG_DAN_SUPABASE.md](HUONG_DAN_SUPABASE.md)
-
-### 3. Kết Quả Khởi Động
-
-```
-================================================================================
-🎓 HỆ THỐNG PHÂN LOẠI SINH VIÊN - K-MEANS + KNN + CHUẨN HÓA
-================================================================================
-
-📊 Khởi tạo hệ thống...
-✅ Đã tải 201 sinh viên
-
-🔧 Phương pháp chuẩn hóa mặc định: MINMAX
-
-🔵 K-MEANS: Đang phân cụm sinh viên...
-  Cụm 2 (điểm TB: 0.820) -> Xuat sac
-  Cụm 0 (điểm TB: 0.793) -> Kha
-  Cụm 1 (điểm TB: 0.763) -> Trung binh
-  Cụm 3 (điểm TB: 0.617) -> Yeu
-
-🟢 KNN: Đang học từ kết quả K-means...
-  ✓ KNN đã học xong với k=5, độ chính xác: 100.00%
-
-📊 Thống kê ban đầu:
-  • Xuất sắc    :  19 sinh viên (  9.5%)
-  • Khá         : 111 sinh viên ( 55.2%)
-  • Trung bình  :  30 sinh viên ( 14.9%)
-  • Yếu         :  41 sinh viên ( 20.4%)
-  • Bất thường  :   0 trường hợp
-
-✅ Hệ thống đã sẵn sàng!
-🌐 http://localhost:5000
-```
+Server chạy tại: **http://localhost:5000**
 
 ## 📡 API Endpoints
 
-### Web Application API (Port 5000)
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/students` | Danh sách sinh viên (có điểm tích hợp) |
+| GET | `/api/students?class=22CT112` | Lọc theo lớp |
+| GET | `/api/student/<id>` | Chi tiết sinh viên |
+| GET | `/api/statistics` | Thống kê tổng quan |
+| GET | `/api/courses` | Danh sách môn học & kỹ năng |
+| POST | `/api/classify` | Phân loại lại với phương pháp chuẩn hóa |
+| POST | `/api/sync-supabase` | Đồng bộ dữ liệu lên Supabase |
 
-#### 1. Phân Loại Sinh Viên
+### Ví dụ API
 ```bash
-POST http://localhost:5000/api/classify
-Content-Type: application/json
-
-{
-  "normalization_method": "minmax"
-}
-```
-
-**Phương pháp chuẩn hóa:**
-- `"minmax"` - Min-Max Scaling (mặc định)
-- `"zscore"` - Z-Score Normalization
-- `"robust"` - Robust Scaling
-
-**Response:**
-```json
-{
-  "success": true,
-  "normalization_method": "minmax",
-  "students": [...],
-  "skill_evaluations": {...},
-  "statistics": {
-    "total": 201,
-    "level_counts": {
-      "Xuat sac": 19,
-      "Kha": 111,
-      "Trung binh": 30,
-      "Yeu": 41
-    },
-    "anomaly_count": 0
-  }
-}
-```
-
-#### 2. Lấy Danh Sách Sinh Viên
-```bash
-GET http://localhost:5000/api/students
-GET http://localhost:5000/api/students?class=22CT112
-```
-
-#### 3. Thống Kê
-```bash
-GET http://localhost:5000/api/statistics
-GET http://localhost:5000/api/statistics?class=22CT112
-```
-
-#### 4. Chi Tiết Sinh Viên
-```bash
-GET http://localhost:5000/api/student/125001001
-```
-
-#### 5. Danh Sách Môn Học
-```bash
-GET http://localhost:5000/api/courses
-```
-
----
-
-### 🔌 REST API cho Bên Thứ 3 (Port 5001)
-
-**Để cung cấp API cho người khác sử dụng:**
-
-#### Khởi động API Server:
-```bash
-# Windows
-run_api_server.bat
-
-# Hoặc
-python api_server.py
-```
-
-Server chạy tại: **http://localhost:5001**
-
-#### Tài liệu API:
-- **Quickstart:** [API_QUICKSTART.md](API_QUICKSTART.md)
-- **Hướng dẫn đầy đủ:** [API_USAGE_GUIDE.md](API_USAGE_GUIDE.md)
-- **Postman Collection:** [Student_Classification_API.postman_collection.json](Student_Classification_API.postman_collection.json)
-
-#### API Key Demo:
-```
-X-API-Key: demo_key_12345
-```
-
-#### Ví dụ sử dụng:
-```bash
-# Phân loại 1 sinh viên
-curl -X POST http://localhost:5001/api/classify \
-  -H "X-API-Key: demo_key_12345" \
+# Phân loại với Robust Scaling
+curl -X POST http://localhost:5000/api/classify \
   -H "Content-Type: application/json" \
-  -d '{
-    "student_id": 999999001,
-    "name": "Nguyễn Văn A",
-    "csv_data": {...},
-    "courses": {...}
-  }'
-
-# Lấy thống kê
-curl -X GET http://localhost:5001/api/statistics \
-  -H "X-API-Key: demo_key_12345"
+  -d '{"normalization_method": "robust"}'
 ```
 
-#### Test API:
-```bash
-python test_api_client.py
-```
+## 📊 Đặc Trưng Phân Loại (12 Features)
 
-## 🔬 3 Phương Pháp Chuẩn Hóa
+**Điểm số (50%)**
+- Điểm TB các môn, Giữa kỳ, Cuối kỳ, Bài tập
 
-### 1. Min-Max Scaling (Mặc định)
-```python
-# Công thức: (x - min) / (max - min)
-# Kết quả: [0, 1]
-# Ưu điểm: Đơn giản, giữ phân phối gốc
-# Nhược điểm: Nhạy cảm với outliers
-```
-
-### 2. Z-Score (Standard Scaling)
-```python
-# Công thức: (x - mean) / std
-# Kết quả: Mean = 0, Std = 1
-# Ưu điểm: Phù hợp với phân phối chuẩn
-# Nhược điểm: Nhạy cảm với outliers
-```
-
-### 3. Robust Scaling
-```python
-# Công thức: (x - median) / IQR
-# Kết quả: Median = 0, IQR = 1
-# Ưu điểm: Chống nhiễu tốt, dùng median
-# Nhược điểm: Phức tạp hơn
-```
-
-## 📊 Đặc Trưng Sử Dụng
-
-Hệ thống sử dụng 7 đặc trưng chính:
-
-1. **avg_course_score** - Điểm trung bình các môn
-2. **study_hours** - Số giờ học/tuần
-3. **behavior** - Điểm hành vi
-4. **anomaly_score** - Mức độ bất thường
-5. **num_passed** - Tỷ lệ môn đạt
-6. **midterm** - Điểm giữa kỳ
-7. **final** - Điểm cuối kỳ
+**Hành vi (50%)**
+- Tham gia, Hành vi, Chuyên cần, Hoàn thành BT, Thời gian làm bài, Độ ổn định điểm
 
 ## 🎯 Phát Hiện Bất Thường
 
-Hệ thống tự động phát hiện gian lận dựa trên:
+| Mức độ | Điều kiện | Hành động |
+|--------|-----------|-----------|
+| Nghiêm trọng | Điểm ≥8.5 + Thời gian <5h | Hạ xuống Yếu |
+| Nghiêm trọng | Điểm ≥8.0 + Vắng >50% | Hạ xuống Yếu |
+| Trung bình | Nộp muộn 10-14 lần | Hạ 2 bậc |
+| Nhẹ | Nộp muộn 5-9 lần | Hạ 1 bậc |
 
-```python
-# Rất nghiêm trọng: Điểm 10 nhưng làm < 2 phút
-if điểm >= 9.5 and thời_gian < 2:
-    → Hạ xuống "Yếu"
+## 📚 Môn Học & Kỹ Năng
 
-# Nghiêm trọng: Điểm >= 9.0 nhưng làm < 5 phút
-elif điểm >= 9.0 and thời_gian < 5:
-    → Hạ xuống "Trung bình"
+| Môn học | Kỹ năng |
+|---------|---------|
+| Nhập Môn Lập Trình | Biến & Kiểu dữ liệu, Cấu trúc điều khiển, Vòng lặp, Hàm cơ bản |
+| Kĩ Thuật Lập Trình | Mảng, Con trỏ, Chuỗi ký tự, File I/O |
+| Cấu trúc Dữ Liệu & Giải Thuật | Arrays, Linked List, Stack/Queue, Trees |
+| Lập Trình Hướng Đối Tượng | Lớp & Đối tượng, Kế thừa, Đa hình, Đóng gói |
 
-# Đáng nghi: Điểm >= 8.0 nhưng làm < 10 phút
-elif điểm >= 8.0 and thời_gian < 10:
-    → Hạ 1 mức
-```
-
-## 💻 Sử Dụng Trong Code
-
-```python
-from data_generator import StudentDataGenerator
-from student_classifier import StudentClassifier
-
-# Tải dữ liệu
-generator = StudentDataGenerator(
-    seed=42,
-    csv_path='student_classification_supabase_ready_final.csv'
-)
-students = generator.load_all_students()
-
-# Khởi tạo classifier với phương pháp chuẩn hóa
-classifier = StudentClassifier(
-    n_clusters=4,
-    normalization_method='minmax'  # hoặc 'zscore', 'robust'
-)
-
-# Huấn luyện (K-means + KNN)
-classifier.fit(students)
-
-# Dự đoán
-results = classifier.predict(students)
-
-# Hiển thị kết quả
-for student in results[:5]:
-    print(f"{student['name']}: {student['final_level']}")
-    if student['anomaly_detected']:
-        print(f"  ⚠️ {student['anomaly_reason']}")
-```
-
-## 📁 Cấu Trúc Files
+## 📁 Cấu Trúc Project
 
 ```
-classifies-students/
-├── app.py                          # Flask API server
-├── student_classifier.py           # K-means + KNN + Chuẩn hóa
-├── data_generator.py               # Tạo/tải dữ liệu
-├── skill_evaluator.py              # Đánh giá kỹ năng
-├── course_definitions.py           # Định nghĩa môn học
-├── knn_clustering_normalizer.py    # Module KNN riêng
-├── requirements.txt                # Dependencies
-├── README.md                       # File này
-└── student_classification_supabase_ready_final.csv
-```
-
-## 🌐 Web Interface
-
-Mở trình duyệt tại: **http://localhost:5000**
-
-Giao diện web cho phép:
-- ✅ Xem danh sách sinh viên đã phân loại
-- ✅ Xem thống kê theo mức độ
-- ✅ Xem chi tiết từng sinh viên
-- ✅ Lọc theo lớp
-- ✅ Phân loại lại với phương pháp khác
-
-## 🔧 Tùy Chỉnh
-
-### Thay đổi phương pháp chuẩn hóa:
-```python
-classifier = StudentClassifier(
-    n_clusters=4,
-    normalization_method='robust'  # Chống nhiễu tốt hơn
-)
-```
-
-### Thay đổi số cụm:
-```python
-classifier = StudentClassifier(
-    n_clusters=5,  # 5 mức độ thay vì 4
-    normalization_method='minmax'
-)
+├── app.py                      # Flask API server chính
+├── student_classifier.py       # K-means + KNN + Chuẩn hóa
+├── integrated_scoring_system.py # Hệ thống chấm điểm tích hợp
+├── skill_evaluator.py          # Đánh giá kỹ năng
+├── skill_based_classifier.py   # Phân loại theo kỹ năng
+├── course_definitions.py       # Định nghĩa môn học
+├── supabase_sync.py            # Đồng bộ Supabase
+├── knn_clustering_normalizer.py # Module KNN riêng
+├── templates/                  # Giao diện web
+├── static/                     # CSS, JS
+└── requirements.txt            # Dependencies
 ```
 
 ## 📈 Kết Quả Thực Tế
 
-Với 300 sinh viên:
+Với 201 sinh viên:
 
 | Mức độ | Số lượng | Tỷ lệ |
 |--------|----------|-------|
@@ -358,6 +151,12 @@ taskkill /PID <PID> /F
 app.run(port=5001)
 ```
 
+### Lỗi: File CSV không tồn tại
+```bash
+# Đảm bảo file CSV nằm cùng thư mục
+ls student_classification_supabase_ready_final.csv
+```
+
 ## 📚 Tài Liệu Tham Khảo
 
 - [Scikit-learn K-means](https://scikit-learn.org/stable/modules/clustering.html#k-means)
@@ -366,4 +165,4 @@ app.run(port=5001)
 
 ## 📝 License
 
-MIT License - Tự do sử dụng cho mục đích học tập và nghiên cứu.
+MIT License
