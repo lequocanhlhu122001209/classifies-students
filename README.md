@@ -358,12 +358,6 @@ taskkill /PID <PID> /F
 app.run(port=5001)
 ```
 
-### Lỗi: File CSV không tồn tại
-```bash
-# Đảm bảo file CSV nằm cùng thư mục
-ls student_classification_supabase_ready_final.csv
-```
-
 ## 📚 Tài Liệu Tham Khảo
 
 - [Scikit-learn K-means](https://scikit-learn.org/stable/modules/clustering.html#k-means)
