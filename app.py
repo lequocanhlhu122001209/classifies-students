@@ -7,6 +7,11 @@ from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 import json
 import os
+import sys
+
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
 from dotenv import load_dotenv
 from data_generator import StudentDataGenerator
 from student_classifier import StudentClassifier
@@ -16,7 +21,6 @@ from integrated_scoring_system import IntegratedScoringSystem
 from course_definitions import COURSES, CLASSIFICATION_LEVELS
 import base64
 import re
-import sys
 
 # Load environment variables from .env
 load_dotenv()
@@ -403,7 +407,7 @@ def sync_supabase():
         }), 500
     
     try:
-        from supabase_sync import sync_to_supabase
+        from src.supabase_sync import sync_to_supabase
         
         # Sync dữ liệu
         success = sync_to_supabase(current_students, current_classifications, integrated_results)
