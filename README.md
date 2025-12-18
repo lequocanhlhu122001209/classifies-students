@@ -334,7 +334,7 @@ classifier = StudentClassifier(
 
 ## 📈 Kết Quả Thực Tế
 
-Với 201 sinh viên:
+Với 300 sinh viên:
 
 | Mức độ | Số lượng | Tỷ lệ |
 |--------|----------|-------|
