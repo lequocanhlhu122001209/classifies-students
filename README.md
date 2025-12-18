@@ -50,7 +50,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Cấu hình Supabase
-Tạo file `.env`:
+Tạo file `.env` (copy từ `.env.example`):
 ```env
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-anon-key
@@ -113,17 +113,34 @@ curl -X POST http://localhost:5000/api/classify \
 
 ```
 ├── app.py                      # Flask API server chính
-├── student_classifier.py       # K-means + KNN + Chuẩn hóa
-├── integrated_scoring_system.py # Hệ thống chấm điểm tích hợp
-├── skill_evaluator.py          # Đánh giá kỹ năng
-├── skill_based_classifier.py   # Phân loại theo kỹ năng
-├── course_definitions.py       # Định nghĩa môn học
-├── supabase_sync.py            # Đồng bộ Supabase
-├── knn_clustering_normalizer.py # Module KNN riêng
+├── main.py                     # Script chạy phân loại
+├── requirements.txt            # Dependencies
+├── .env.example                # Mẫu cấu hình
+│
+├── src/                        # Core modules
+│   ├── student_classifier.py   # K-means + KNN + Chuẩn hóa
+│   ├── integrated_scoring_system.py
+│   ├── skill_evaluator.py
+│   ├── skill_based_classifier.py
+│   ├── course_definitions.py
+│   ├── data_generator.py       # Load data từ Supabase
+│   └── supabase_sync.py
+│
+├── scripts/                    # Utility scripts
+│   ├── analysis/               # Scripts phân tích
+│   └── utils/                  # Scripts tiện ích
+│
 ├── templates/                  # Giao diện web
 ├── static/                     # CSS, JS
-└── requirements.txt            # Dependencies
+└── models/                     # Trained models (.pkl)
 ```
+
+## 🛠️ Công Nghệ
+
+- **Backend**: Flask, Python 3.x
+- **ML**: scikit-learn (K-means, KNN, MinMaxScaler, StandardScaler)
+- **Database**: Supabase (PostgreSQL)
+- **Data**: NumPy, Pandas
 
 ## 📈 Kết Quả Thực Tế
 
@@ -136,32 +153,7 @@ Với 201 sinh viên:
 | Trung bình | 30 | 14.9% |
 | Yếu | 41 | 20.4% |
 
-**Độ chính xác KNN:** 100%  
-**Phát hiện bất thường:** 0 trường hợp
-
-## 🐛 Troubleshooting
-
-### Lỗi: Port đã được sử dụng
-```bash
-# Tìm và kill process
-netstat -ano | findstr :5000
-taskkill /PID <PID> /F
-
-# Hoặc đổi port
-app.run(port=5001)
-```
-
-### Lỗi: File CSV không tồn tại
-```bash
-# Đảm bảo file CSV nằm cùng thư mục
-ls student_classification_supabase_ready_final.csv
-```
-
-## 📚 Tài Liệu Tham Khảo
-
-- [Scikit-learn K-means](https://scikit-learn.org/stable/modules/clustering.html#k-means)
-- [Scikit-learn KNN](https://scikit-learn.org/stable/modules/neighbors.html)
-- [Feature Scaling](https://scikit-learn.org/stable/modules/preprocessing.html)
+**Độ chính xác KNN:** 100%
 
 ## 📝 License
 
