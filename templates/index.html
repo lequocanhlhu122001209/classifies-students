@@ -1,0 +1,3763 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Phân Loại Sinh Viên Theo Kỹ Năng</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script>
+        // Format điểm số cho đẹp - Loại bỏ .0 và .00
+        function formatScore(score) {
+            if (!score && score !== 0) return "N/A";
+            // Nếu điểm là số nguyên (10, 9, 8,...), hiển thị không có thập phân
+            if (Number.isInteger(score)) return `${score}`;
+            // Nếu là số thập phân, làm tròn đến 1 chữ số và bỏ .0 nếu có
+            return score.toFixed(1).replace(/\.0$/, '');
+        }
+        
+        // Format số thập phân - Loại bỏ .0 và .00 không cần thiết
+        function formatNumber(num, decimals = 1) {
+            if (num === null || num === undefined || isNaN(num)) return "N/A";
+            if (Number.isInteger(num)) return `${num}`;
+            const fixed = num.toFixed(decimals);
+            // Loại bỏ .0, .00 ở cuối
+            return fixed.replace(/\.0+$/, '');
+        }
+    </script>
+    <script>
+        // Hàm tính điểm trung bình
+        function calculateAverageScore(student) {
+            let totalScore = 0;
+            let courseCount = 0;
+            
+            if (student.courses) {
+                Object.values(student.courses).forEach(course => {
+                    if (course.score !== undefined) {
+                        totalScore += course.score;
+                        courseCount++;
+                    }
+                });
+            }
+            
+            return courseCount > 0 ? totalScore / courseCount : 0;
+        }
+        
+        // Hàm tính TỔNG thời gian học (không phải trung bình)
+        function calculateTotalTime(student) {
+            let totalTime = 0;
+            
+            if (student.courses) {
+                Object.values(student.courses).forEach(course => {
+                    if (course.time_minutes !== undefined) {
+                        totalTime += course.time_minutes;
+                    }
+                });
+            }
+            
+            return totalTime;
+        }
+        
+        // Hàm tính thời gian trung bình mỗi môn (để tương thích code cũ)
+        function calculateAverageTime(student) {
+            const totalTime = calculateTotalTime(student);
+            const courseCount = Object.keys(student.courses || {}).length;
+            return courseCount > 0 ? totalTime / courseCount : 0;
+        }
+        
+        // Hàm format thời gian
+        function formatTime(minutes) {
+            if (typeof minutes !== 'number') return "0h 0m";
+            const hours = Math.floor(minutes / 60);
+            const mins = Math.round(minutes % 60);
+            return `${hours}h ${mins}m`;
+        }
+        
+        // Hàm xác định level cuối cùng - Ưu tiên kết quả K-means/KNN từ server
+        function determineFinalLevel(student, levelNames) {
+            // Ưu tiên dùng final_level từ K-means/KNN
+            if (student.final_level) {
+                return student.final_level;
+            }
+            
+            // Fallback: tính toán nếu không có từ server
+            const avgScore = calculateAverageScore(student);
+            
+            if (avgScore >= 8.5) return 'Xuat sac';
+            if (avgScore >= 7.0) return 'Kha';
+            if (avgScore >= 5.0) return 'Trung binh';
+            return 'Yeu';
+        }
+        
+        // Hàm phân tích vấn đề của sinh viên (dùng chung cho tất cả các phần)
+        function analyzeStudentIssues(student) {
+            const courses = student.courses || {};
+            const csvData = student.csv_data || {};
+            
+            const courseValues = Object.values(courses);
+            const avgScore = courseValues.reduce((sum, c) => sum + (c.score || 0), 0) / (courseValues.length || 1);
+            const totalTime = courseValues.reduce((sum, c) => sum + (c.time_minutes || 0), 0);
+            const timeInHours = totalTime / 60;
+            const attendance = parseFloat(csvData.attendance_rate || 0) * 100;
+            const lateSubmissions = parseInt(csvData.late_submissions || 0);
+            
+            const courseScores = courseValues.map(c => c.score || 0);
+            const scoreStdDev = courseScores.length > 0 ? 
+                Math.sqrt(courseScores.reduce((sum, s) => sum + Math.pow(s - avgScore, 2), 0) / courseScores.length) : 0;
+            
+            let issues = [];
+            let hasAnomaly = student.anomaly_detected || false;
+            
+            // 1. Điểm cao + thời gian ngắn (nghi gian lận/dùng AI)
+            // Sinh viên xuất sắc cần ít nhất 8-10h, khá cần 6-8h
+            if (avgScore >= 8.5 && timeInHours < 4) {
+                issues.push({ text: `Điểm ${avgScore.toFixed(1)}/10 nhưng thời gian chỉ ${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m (nghi gian lận)`, severity: 'critical', points: 15, type: 'anomaly' });
+                hasAnomaly = true;
+            } else if (avgScore >= 8.0 && timeInHours < 3) {
+                issues.push({ text: `Điểm ${avgScore.toFixed(1)}/10 nhưng thời gian chỉ ${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m (đáng nghi)`, severity: 'high', points: 10, type: 'anomaly' });
+                hasAnomaly = true;
+            } else if (avgScore >= 7.0 && timeInHours < 2) {
+                issues.push({ text: `Điểm ${avgScore.toFixed(1)}/10 nhưng thời gian quá ngắn ${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m`, severity: 'medium', points: 8, type: 'anomaly' });
+                hasAnomaly = true;
+            }
+            
+            // 2. Thời gian học quá ngắn
+            if (timeInHours < 1.5) {
+                issues.push({ text: `Thời gian học quá ngắn (${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m)`, severity: 'high', points: 12, type: 'warning' });
+            } else if (timeInHours < 5) {
+                issues.push({ text: `Thời gian học thấp (${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m), cần tăng đáng kể`, severity: 'medium', points: 6, type: 'warning' });
+            }
+            
+            // 3. Tham gia lớp thấp
+            if (attendance < 50 && avgScore >= 9.0) {
+                issues.push({ text: `Vắng mặt ${Math.round(100-attendance)}% nhưng điểm vẫn cao (${avgScore.toFixed(1)}/10)`, severity: 'critical', points: 12, type: 'anomaly' });
+                hasAnomaly = true;
+            } else if (attendance < 50) {
+                issues.push({ text: `Tham gia lớp quá thấp (${Math.round(attendance)}%)`, severity: 'high', points: 8, type: 'warning' });
+            } else if (attendance < 70) {
+                issues.push({ text: `Tham gia lớp thấp (${Math.round(attendance)}%), cần cải thiện`, severity: 'medium', points: 4, type: 'warning' });
+            }
+            
+            // 4. Nộp trễ nhiều
+            if (lateSubmissions >= 15) {
+                issues.push({ text: `Nộp bài trễ nhiều (${lateSubmissions} lần)`, severity: 'high', points: 12, type: 'warning' });
+            } else if (lateSubmissions >= 10) {
+                issues.push({ text: `Nộp bài trễ ${lateSubmissions} lần`, severity: 'medium', points: 8, type: 'warning' });
+            } else if (lateSubmissions >= 5) {
+                issues.push({ text: `Nộp bài trễ ${lateSubmissions} lần - cần cải thiện kỷ luật`, severity: 'low', points: 4, type: 'warning' });
+            }
+            
+            // 5. Điểm số thấp - Cần cải thiện
+            if (avgScore < 4.0) {
+                issues.push({ text: `Điểm số (${avgScore.toFixed(1)}/10) quá thấp, cần nỗ lực nhiều hơn`, severity: 'high', points: 10, type: 'warning' });
+            } else if (avgScore < 5.0) {
+                issues.push({ text: `Điểm số (${avgScore.toFixed(1)}/10) dưới trung bình, cần cải thiện`, severity: 'medium', points: 6, type: 'warning' });
+            }
+            
+            // 6. Điểm chênh lệch lớn - Tăng ngưỡng
+            if (scoreStdDev > 3.5 && avgScore >= 8.0) {
+                issues.push({ text: `Điểm các môn chênh lệch lớn (độ lệch: ${scoreStdDev.toFixed(1)})`, severity: 'high', points: 10, type: 'anomaly' });
+                hasAnomaly = true;
+            }
+            
+            // 7. Điểm tăng đột ngột - Ngưỡng chặt hơn
+            const midtermScore = parseFloat(csvData.midterm_score || 0);
+            if (midtermScore < 4.0 && avgScore >= 9.5) {
+                issues.push({ text: `Điểm tăng đột ngột (giữa kỳ ${midtermScore.toFixed(1)} → bài tập ${avgScore.toFixed(1)})`, severity: 'critical', points: 15, type: 'anomaly' });
+                hasAnomaly = true;
+            }
+            
+            // Thêm lý do từ server nếu có (anomaly_reasons là array)
+            const serverReasons = student.anomaly_reasons || [];
+            if (Array.isArray(serverReasons)) {
+                serverReasons.forEach(reason => {
+                    if (reason && !issues.some(i => i.text.includes(reason.substring(0, 20)))) {
+                        issues.push({ text: reason, severity: 'high', points: 10 });
+                    }
+                });
+            } else if (student.anomaly_reason && !issues.some(i => i.text === student.anomaly_reason)) {
+                issues.push({ text: student.anomaly_reason, severity: 'high', points: 10 });
+            }
+            
+            // Lấy behavior từ csv_data
+            const behavior = parseInt(csvData.behavior_score_100 || 0);
+            
+            return {
+                issues: issues,
+                hasAnomaly: hasAnomaly,
+                totalPenalty: issues.reduce((sum, i) => sum + i.points, 0),
+                stats: { avgScore, timeInHours, totalTime, attendance, lateSubmissions, scoreStdDev, midtermScore, behavior }
+            };
+        }
+        
+        // Hàm cập nhật bảng phân tích theo môn học
+        function updateScoreTable(studentId) {
+            const filterSelect = document.getElementById(`courseFilter_${studentId}`);
+            const selectedCourse = filterSelect.value;
+            
+            // Đồng bộ với bộ lọc chi tiết môn học
+            const modalFilter = document.getElementById(`modalCourseFilter_${studentId}`);
+            if (modalFilter && modalFilter.value !== selectedCourse) {
+                modalFilter.value = selectedCourse;
+                // Lọc các môn học hiển thị
+                const courseItems = document.querySelectorAll('.course-detail-item');
+                courseItems.forEach(item => {
+                    const courseName = item.getAttribute('data-course');
+                    if (selectedCourse === 'all' || courseName === selectedCourse) {
+                        item.style.display = 'block';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Tìm student trong dữ liệu
+            const student = window.studentsData.find(s => s.student_id === studentId);
+            if (!student) return;
+            
+            const courses = student.courses || {};
+            const csvData = student.csv_data || {};
+            
+            let filteredCourses = courses;
+            let courseLabel = "Tất cả môn";
+            
+            if (selectedCourse !== 'all') {
+                filteredCourses = { [selectedCourse]: courses[selectedCourse] };
+                courseLabel = selectedCourse;
+            }
+            
+            // Tính toán lại các giá trị
+            const courseValues = Object.values(filteredCourses);
+            const avgScore = courseValues.reduce((sum, c) => sum + (c.score || 0), 0) / courseValues.length;
+            const totalTime = courseValues.reduce((sum, c) => sum + (c.time_minutes || 0), 0);
+            const timeInHours = totalTime / 60;
+            
+            const attendance = parseFloat(csvData.attendance_rate || 0) * 100;
+            const totalLateSubmissions = parseInt(csvData.late_submissions || 0);
+            
+            const courseScores = courseValues.map(c => c.score || 0);
+            const scoreStdDev = courseScores.length > 0 ? Math.sqrt(courseScores.reduce((sum, s) => sum + Math.pow(s - avgScore, 2), 0) / courseScores.length) : 0;
+            
+            // Cập nhật bảng
+            const container = document.getElementById(`scoreTableContainer_${studentId}`);
+            container.innerHTML = `
+                <div style="background: #e3f2fd; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; font-weight: bold; color: #1976d2;">
+                    📖 Đang xem: ${courseLabel}
+                </div>
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px;">
+                    <thead>
+                        <tr style="background: #667eea; color: white;">
+                            <th style="padding: 10px; text-align: left; border-radius: 5px 0 0 0;">Yếu tố</th>
+                            <th style="padding: 10px; text-align: center; border-radius: 0 5px 0 0;">Giá trị</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background: white;">
+                            <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>📊 Điểm trung bình</strong></td>
+                            <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${avgScore >= 8 ? '#28a745' : avgScore >= 6.5 ? '#17a2b8' : avgScore >= 5 ? '#ffc107' : '#dc3545'};">${avgScore.toFixed(1)}/10</td>
+                        </tr>
+                        <tr style="background: #f8f9fa;">
+                            <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>⏱️ Tổng thời gian học</strong></td>
+                            <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${timeInHours >= 10 ? '#28a745' : timeInHours >= 5 ? '#17a2b8' : '#ffc107'};">${Math.floor(timeInHours)}h ${Math.round(totalTime % 60)}m</td>
+                        </tr>
+                        <tr style="background: white;">
+                            <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>✅ Tỷ lệ tham dự</strong></td>
+                            <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${attendance >= 80 ? '#28a745' : attendance >= 60 ? '#ffc107' : '#dc3545'};">${Math.round(attendance)}%</td>
+                        </tr>
+                        <tr style="background: #f8f9fa;">
+                            <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>📝 Nộp bài trễ</strong></td>
+                            <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${totalLateSubmissions <= 3 ? '#28a745' : totalLateSubmissions <= 8 ? '#ffc107' : '#dc3545'};">${totalLateSubmissions} lần</td>
+                        </tr>
+                        <tr style="background: white;">
+                            <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>📈 Tính nhất quán điểm</strong></td>
+                            <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${scoreStdDev < 1 ? '#28a745' : scoreStdDev < 2 ? '#ffc107' : '#dc3545'};">${scoreStdDev < 1 ? 'Ổn định' : scoreStdDev < 2 ? 'Trung bình' : 'Không ổn định'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            `;
+        }
+        
+        // Hàm giải thích level
+        // Hàm tính level dựa trên điểm chấm lại (dùng chung cho cả danh sách và chi tiết)
+        function calculateStudentLevel(student) {
+            // Ưu tiên dùng final_level từ server (đã phân loại bằng KMeans/KNN)
+            if (student.final_level) {
+                // Chuẩn hóa về format không dấu
+                const levelMap = {
+                    'Xuất sắc': 'Xuat sac',
+                    'Khá': 'Kha',
+                    'Trung bình': 'Trung binh',
+                    'Yếu': 'Yeu'
+                };
+                return levelMap[student.final_level] || student.final_level;
+            }
+            
+            // Fallback: tính lại nếu không có final_level
+            const avgScore = Object.values(student.courses || {}).reduce((sum, course) => sum + (course.score || 0), 0) / Object.keys(student.courses || {}).length;
+            const avgTime = Object.values(student.courses || {}).reduce((sum, course) => sum + (course.time_minutes || 0), 0) / Object.keys(student.courses || {}).length;
+            const timeInHours = avgTime / 60;
+            const csvData = student.csv_data || {};
+            const attendance = parseFloat(csvData.attendance_rate || 0) * 100;
+            const lateSubmissions = parseInt(csvData.late_submissions || 0);
+            
+            // Tính tổng số bài tập (giả sử mỗi môn có 30 bài, 4 môn = 120 bài)
+            const totalAssignments = Object.keys(student.courses || {}).length * 30;
+            const lateRate = totalAssignments > 0 ? (lateSubmissions / totalAssignments) * 100 : 0;
+            
+            // Tính điểm các yếu tố (35% điểm, 25% thời gian, 20% tham gia, 10% kỷ luật, 10% nhất quán)
+            
+            // 1. Điểm số (35%)
+            let scorePoints = 0;
+            if (avgScore >= 9.0) scorePoints = 35;
+            else if (avgScore >= 8.0) scorePoints = 30;
+            else if (avgScore >= 7.0) scorePoints = 25;
+            else if (avgScore >= 6.0) scorePoints = 20;
+            else if (avgScore >= 5.0) scorePoints = 15;
+            else scorePoints = 8;
+            
+            // 2. Thời gian học (25%) - Điều chỉnh để linh hoạt hơn
+            let timePoints = 0;
+            if (timeInHours >= 15) timePoints = 25;
+            else if (timeInHours >= 12) timePoints = 23;
+            else if (timeInHours >= 10) timePoints = 20;
+            else if (timeInHours >= 8) timePoints = 17;
+            else if (timeInHours >= 5) timePoints = 14;
+            else if (timeInHours >= 3) timePoints = 10;
+            else timePoints = 5;
+            
+            // 3. Tham gia lớp (20%) - Điều chỉnh để linh hoạt hơn
+            let attendancePoints = 0;
+            if (attendance >= 95) attendancePoints = 20;
+            else if (attendance >= 90) attendancePoints = 18;
+            else if (attendance >= 85) attendancePoints = 16;
+            else if (attendance >= 80) attendancePoints = 15;
+            else if (attendance >= 70) attendancePoints = 12;
+            else if (attendance >= 60) attendancePoints = 10;
+            else if (attendance >= 50) attendancePoints = 7;
+            else attendancePoints = 4;
+            
+            // 4. Kỷ luật - Dựa trên TỶ LỆ nộp muộn (10%)
+            // Tính điểm tuyến tính: 10 điểm khi 0% nộp muộn, 0 điểm khi >= 50% nộp muộn
+            let behaviorPoints = Math.max(0, 10 - (lateRate / 5));
+            behaviorPoints = Math.round(behaviorPoints * 10) / 10; // Làm tròn 1 chữ số thập phân
+            
+            const courseScores = Object.values(student.courses || {}).map(c => c.score || 0);
+            const scoreStdDev = courseScores.length > 0 ? 
+                Math.sqrt(courseScores.reduce((sum, s) => sum + Math.pow(s - avgScore, 2), 0) / courseScores.length) : 0;
+            let consistencyPoints = 0;
+            if (scoreStdDev < 0.5) consistencyPoints = 10;
+            else if (scoreStdDev < 1.0) consistencyPoints = 8;
+            else if (scoreStdDev < 1.5) consistencyPoints = 6;
+            else if (scoreStdDev < 2.0) consistencyPoints = 4;
+            else consistencyPoints = 2;
+            
+            const totalPoints = scorePoints + timePoints + attendancePoints + behaviorPoints + consistencyPoints;
+            
+            // Tính penalty - CHỈ PHẠT TRƯỜNG HỢP CỰC ĐOAN để kết quả ổn định
+            let totalPenalty = 0;
+            
+            // 1. Nộp bài CỰC nhanh (< 0.3 phút/bài) - Rõ ràng là gian lận
+            const avgTimePerExercise = avgTime / 30;
+            if (avgTimePerExercise < 0.3 && avgScore >= 9.0) {
+                totalPenalty += 15;
+            }
+            
+            // 2. Điểm CỰC cao với thời gian CỰC ngắn - Chỉ phạt trường hợp cực đoan
+            if (avgScore >= 9.8 && timeInHours < 1.5) {
+                totalPenalty += 20;
+            } else if (avgScore >= 9.5 && timeInHours < 2) {
+                totalPenalty += 12;
+            }
+            
+            // 3. Nộp muộn QUÁ nhiều
+            if (lateSubmissions >= 20) {
+                totalPenalty += 10;
+            } else if (lateSubmissions >= 15) {
+                totalPenalty += 6;
+            }
+            
+            // 4. Điểm không nhất quán CỰC độ
+            if (scoreStdDev > 4.5 && avgScore >= 9.0) {
+                totalPenalty += 8;
+            }
+            
+            // 5. Vắng QUÁ nhiều nhưng điểm cao
+            if (attendance < 30 && avgScore >= 9.5) {
+                totalPenalty += 12;
+            } else if (attendance < 40 && avgScore >= 9.8) {
+                totalPenalty += 8;
+            }
+            
+            // 6. Điểm tăng ĐỘT NGỘT bất thường
+            const midtermScore = parseFloat(csvData.midterm_score || 0);
+            if (midtermScore < 3.0 && avgScore >= 9.8) {
+                totalPenalty += 15;
+            } else if (midtermScore < 4.0 && avgScore >= 9.5) {
+                totalPenalty += 8;
+            }
+            
+            const finalPoints = Math.max(0, totalPoints - totalPenalty);
+            
+            // Xác định level - CÂN BẰNG NGƯỠNG
+            if (finalPoints >= 85) return "Xuat sac";
+            else if (finalPoints >= 70) return "Kha";
+            else if (finalPoints >= 52) return "Trung binh";
+            else return "Yeu";
+        }
+        
+        function explainLevel(student) {
+            // Sử dụng điểm từ courses (giống như phần Giải thích xếp loại)
+            const avgScore = Object.values(student.courses || {}).reduce((sum, course) => sum + (course.score || 0), 0) / Object.keys(student.courses || {}).length;
+            // Dùng TỔNG thời gian (không phải trung bình)
+            const totalTime = Object.values(student.courses || {}).reduce((sum, course) => sum + (course.time_minutes || 0), 0);
+            const timeInHours = totalTime / 60;
+            
+            const csvData = student.csv_data || {};
+            const attendance = parseFloat(csvData.attendance_rate || 0) * 100;
+            const lateSubmissions = parseInt(csvData.late_submissions || 0);
+            const level = student.final_level;
+            
+            let explanation = '<div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #667eea;">';
+            explanation += '<h4 style="color: #667eea; margin-bottom: 10px;">💡 Phân tích chi tiết:</h4>';
+            
+            // Phân tích điểm số theo level
+            let scoreAnalysis = '';
+            if (level === 'Xuat sac') {
+                scoreAnalysis = `Điểm số xuất sắc (${formatNumber(avgScore)}/10) cho thấy khả năng nắm vững kiến thức`;
+            } else if (level === 'Kha') {
+                scoreAnalysis = `Điểm số khá (${formatNumber(avgScore)}/10) thể hiện sự hiểu biết tốt về các môn học`;
+            } else if (level === 'Trung binh') {
+                scoreAnalysis = `Điểm số trung bình (${formatNumber(avgScore)}/10) cần củng cố thêm kiến thức`;
+            } else {
+                scoreAnalysis = `Điểm số (${formatNumber(avgScore)}/10) cần nỗ lực nhiều hơn`;
+            }
+
+            // Phân tích thời gian học
+            let studyAnalysis = '';
+            if (timeInHours >= 15) {
+                studyAnalysis = `Thời gian học (${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m) hợp lý`;
+            } else if (timeInHours >= 10) {
+                studyAnalysis = `Thời gian học (${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m) hơi thấp, nên tăng thêm`;
+            } else {
+                studyAnalysis = `Thời gian học (${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m) quá thấp, cần tăng đáng kể`;
+            }
+
+            // Phân tích tham gia
+            let attendanceAnalysis = '';
+            if (attendance >= 90) {
+                attendanceAnalysis = `Tham gia lớp (${Math.round(attendance)}%) rất tốt`;
+            } else if (attendance >= 80) {
+                attendanceAnalysis = `Tham gia lớp (${Math.round(attendance)}%) khá tốt`;
+            } else if (attendance >= 70) {
+                attendanceAnalysis = `Tham gia lớp (${Math.round(attendance)}%) cần cải thiện`;
+            } else {
+                attendanceAnalysis = `Tham gia lớp (${Math.round(attendance)}%) quá thấp`;
+            }
+
+            explanation += `
+                <p style="margin-bottom: 8px"><strong>📊 Điểm số:</strong> ${scoreAnalysis}</p>
+                <p style="margin-bottom: 8px"><strong>⏰ Thời gian học:</strong> ${studyAnalysis}</p>
+                <p style="margin-bottom: 8px"><strong>✅ Tham gia:</strong> ${attendanceAnalysis}</p>
+            `;
+            
+            // Cảnh báo nếu có vấn đề (đồng bộ với phần Giải thích xếp loại)
+            if (lateSubmissions >= 5) {
+                explanation += `<p style="margin-bottom: 8px; color: #f44336;"><strong>⚠️ Nộp muộn:</strong> ${lateSubmissions} lần - Cần cải thiện tính kỷ luật</p>`;
+            }
+            
+            // Cảnh báo bất thường - Chỉ cảnh báo trường hợp cực đoan
+            if (avgScore >= 9.5 && timeInHours < 2) {
+                explanation += `<p style="margin-bottom: 8px; color: #ff9800;"><strong>⚠️ Bất thường:</strong> Điểm ${formatNumber(avgScore)}/10 cao bất thường với thời gian ${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m - Cần kiểm tra lại</p>`;
+            } else if (avgScore >= 9.8 && timeInHours < 3) {
+                explanation += `<p style="margin-bottom: 8px; color: #ff9800;"><strong>⚠️ Bất thường:</strong> Điểm cao nhưng thời gian quá ngắn - Nghi vấn sử dụng AI hoặc sách giải</p>`;
+            }
+            
+            explanation += '</div>';
+            return explanation;
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        h1 {
+            color: #667eea;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 1.2em;
+        }
+
+        .controls {
+            background: white;
+            padding: 25px;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .controls > * {
+            min-width: 0;
+        }
+
+        select {
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 16px;
+            background: white;
+            color: #333;
+            cursor: pointer;
+            transition: border-color 0.3s;
+            width: 100%;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            white-space: nowrap;
+            width: 100%;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        
+        /* Save Dropdown Menu */
+        .save-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .save-menu {
+            animation: fadeIn 0.2s ease;
+        }
+        
+        .save-menu > div:hover {
+            background: #f5f5f5;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        input[type="number"],
+        input[type="text"] {
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 16px;
+            width: 100%;
+            transition: border-color 0.3s;
+        }
+
+        input[type="number"]:focus,
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            text-align: center;
+            transition: all 0.3s;
+            border-top: 4px solid #667eea;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+        }
+
+        .stat-card h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1em;
+            font-weight: 600;
+        }
+
+        .stat-card .number {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .stat-card p {
+            color: #666;
+            font-size: 0.9em;
+            margin: 0;
+        }
+
+        .stat-card.xuat-sac { 
+            border-top: 5px solid #4CAF50;
+            background: linear-gradient(135deg, #ffffff 0%, #f1f8f4 100%);
+        }
+        .stat-card.xuat-sac .number { color: #4CAF50; }
+
+        .stat-card.kha { 
+            border-top: 5px solid #2196F3;
+            background: linear-gradient(135deg, #ffffff 0%, #f1f4f8 100%);
+        }
+        .stat-card.kha .number { color: #2196F3; }
+
+        .stat-card.trung-binh { 
+            border-top: 5px solid #FF9800;
+            background: linear-gradient(135deg, #ffffff 0%, #fff8f1 100%);
+        }
+        .stat-card.trung-binh .number { color: #FF9800; }
+
+        .stat-card.yeu { 
+            border-top: 5px solid #f44336;
+            background: linear-gradient(135deg, #ffffff 0%, #fff5f5 100%);
+        }
+        .stat-card.yeu .number { color: #f44336; }
+
+        /* Phân vùng môn học */
+        .courses-section {
+            margin-bottom: 30px;
+        }
+
+        .course-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .course-tab {
+            background: white;
+            padding: 15px 25px;
+            border-radius: 15px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            border: 3px solid transparent;
+        }
+
+        .course-tab:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .course-tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: #667eea;
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .course-content {
+            background: white;
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            display: none;
+        }
+
+        .course-content.active {
+            display: block;
+        }
+
+        .course-header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .course-header h2 {
+            color: #667eea;
+            font-size: 2em;
+            margin-bottom: 15px;
+        }
+
+        .students-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+            width: 100%;
+        }
+
+        .student-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            padding: 25px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+
+        .student-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.2);
+            border-color: #667eea;
+        }
+
+        .student-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.4em;
+            font-weight: 700;
+        }
+
+        .student-card .level {
+            display: inline-block;
+            padding: 8px 20px;
+            border-radius: 25px;
+            font-size: 0.95em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .level.xuat-sac { background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; }
+        .level.kha { background: linear-gradient(135deg, #2196F3 0%, #1e88e5 100%); color: white; }
+        .level.trung-binh { background: linear-gradient(135deg, #FF9800 0%, #fb8c00 100%); color: white; }
+        .level.yeu { background: linear-gradient(135deg, #f44336 0%, #e53935 100%); color: white; }
+
+        .anomaly {
+            background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+            border-left: 5px solid #f44336;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 10px;
+            font-weight: 600;
+            color: #c62828;
+        }
+
+        .course-info {
+            margin: 15px 0;
+            padding: 15px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e9ecef 100%);
+            border-radius: 12px;
+            border-left: 4px solid #667eea;
+        }
+
+        .course-info strong {
+            color: #667eea;
+            font-size: 1.1em;
+        }
+
+        .skills-summary {
+            margin-top: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 12px;
+            border: 2px solid #e0e0e0;
+        }
+
+        .skills-summary h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+
+        .skill-item {
+            margin: 8px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.3s;
+        }
+
+        .skill-item:hover {
+            background: #e9ecef;
+        }
+
+        .skill-item.passed { border-left: 4px solid #4CAF50; }
+        .skill-item.failed { border-left: 4px solid #f44336; }
+
+        .skill-name {
+            flex: 1;
+            font-weight: 500;
+        }
+
+        .skill-score {
+            font-weight: bold;
+            margin: 0 10px;
+        }
+
+        .skill-status {
+            font-size: 1.2em;
+        }
+
+        .skill-item.passed .skill-score { color: #4CAF50; }
+        .skill-item.failed .skill-score { color: #f44336; }
+
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: white;
+            font-size: 1.3em;
+            font-weight: 600;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255,255,255,0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        #status {
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-left: auto;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.7);
+            overflow: auto;
+        }
+
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 20px;
+            width: 90%;
+            max-width: 900px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+
+        .close:hover {
+            color: #000;
+        }
+
+        .charts-section {
+            margin-bottom: 30px;
+        }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 25px;
+        }
+
+        .chart-card {
+            background: white;
+            padding: 25px;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            transition: transform 0.3s;
+        }
+
+        .chart-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .chart-card h3 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            padding: 15px;
+        }
+
+        @media (max-width: 768px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+            .students-grid {
+                grid-template-columns: 1fr;
+            }
+            .course-tabs {
+                flex-direction: column;
+            }
+            .course-tab {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+        <div class="container">
+        <header>
+            <h1>🎓 Hệ Thống Phân Loại Sinh Viên Theo Kỹ Năng</h1>
+            <p class="subtitle">Phân tích điểm số, thời gian và phát hiện gian lận</p>
+        </header>
+
+        <!-- Điều khiển -->
+        <div class="controls">
+            <input type="text" id="studentSearchInput" placeholder="🔎 Tìm sinh viên (tên hoặc MSSV)" oninput="searchStudents()">
+            <input type="text" id="classSearchInput" placeholder="🔎 Nhập mã lớp (VD: 22CT111)">
+            <button onclick="searchByClass()">🔎 Tìm lớp</button>
+            <select id="classFilter" onchange="filterByClass()">
+                <option value="">🏫 Tất cả lớp</option>
+            </select>
+            <select id="courseFilter" onchange="filterByCourse()">
+                <option value="">📚 Tất cả môn học</option>
+            </select>
+            <button id="toggleViewBtn" onclick="toggleViewMode()">🗒️ Chế độ: Danh sách</button>
+            
+            <!-- Nút Lưu Dữ Liệu (Gộp) -->
+            <div class="save-dropdown" style="position: relative; display: inline-block;">
+                <button onclick="toggleSaveMenu()" id="saveBtn" style="background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);">
+                    💾 Lưu Dữ Liệu ▼
+                </button>
+                <div id="saveMenu" class="save-menu" style="display: none; position: absolute; top: 100%; left: 0; background: white; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 1000; min-width: 200px; margin-top: 5px;">
+                    <div onclick="saveAllToSupabase()" style="padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 18px;">☁️</span>
+                        <div>
+                            <div style="font-weight: 600; color: #333;">Lưu lên Supabase</div>
+                            <div style="font-size: 11px; color: #666;">Đồng bộ lên cloud</div>
+                        </div>
+                    </div>
+                    <div onclick="downloadCurrentList(); toggleSaveMenu();" style="padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 18px;">📥</span>
+                        <div>
+                            <div style="font-weight: 600; color: #333;">Tải danh sách (CSV)</div>
+                            <div style="font-size: 11px; color: #666;">Xuất file CSV</div>
+                        </div>
+                    </div>
+                    <div onclick="downloadByClass(); toggleSaveMenu();" style="padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 18px;">🏫</span>
+                        <div>
+                            <div style="font-weight: 600; color: #333;">Tải theo lớp</div>
+                            <div style="font-size: 11px; color: #666;">Xuất theo lớp đang chọn</div>
+                        </div>
+                    </div>
+                    <div onclick="downloadByCourse(); toggleSaveMenu();" style="padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 18px;">📚</span>
+                        <div>
+                            <div style="font-weight: 600; color: #333;">Tải theo môn</div>
+                            <div style="font-size: 11px; color: #666;">Xuất theo môn đang chọn</div>
+                        </div>
+                    </div>
+                    <div onclick="downloadScoreReport(); toggleSaveMenu();" style="padding: 12px 16px; cursor: pointer; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 18px;">📊</span>
+                        <div>
+                            <div style="font-weight: 600; color: #333;">Tải bảng điểm chi tiết</div>
+                            <div style="font-size: 11px; color: #666;">Điểm từng môn + kỹ năng</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="statsContainer" class="stats"></div>
+
+        <!-- Biểu đồ thống kê -->
+        <div class="charts-section">
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>📊 Phân Bố Sinh Viên Theo Mức Độ</h3>
+                    <div class="chart-container">
+                        <canvas id="levelChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>📈 Điểm Trung Bình Theo Môn Học</h3>
+                    <div class="chart-container">
+                        <canvas id="courseScoreChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>🎯 Tỷ Lệ Kỹ Năng Đạt Theo Môn</h3>
+                    <div class="chart-container">
+                        <canvas id="skillPassChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>⏱️ Phân Bố Thời Gian Làm Bài</h3>
+                    <div class="chart-container">
+                        <canvas id="timeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Danh sách sinh viên tổng hợp -->
+        <div id="studentsList" class="students-list" style="margin:20px 0;"></div>
+    </div>
+
+    <!-- Modal chi tiết sinh viên -->
+    <div id="studentModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <div id="modalContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+    let currentCourse = null;
+    let currentClass = '';
+    let coursesData = {};
+    let allStudents = [];
+    let skillEvaluations = {};
+    let uniqueClasses = new Set();
+    // UI state
+    window.viewMode = localStorage.getItem('viewMode') || 'grid'; // Lưu chế độ xem
+    let lastRenderedStudents = [];
+    
+    // Cập nhật nút chuyển đổi chế độ xem khi tải trang
+    window.addEventListener('DOMContentLoaded', () => {
+        const btn = document.getElementById('toggleViewBtn');
+        if (btn) {
+            btn.textContent = window.viewMode === 'table' ? '🗒️ Chế độ: Danh sách' : '🔲 Chế độ: Lưới';
+        }
+        // Tải dữ liệu ban đầu
+        loadStudents();
+    });
+
+        // Định nghĩa 4 môn học
+        const COURSES = {
+            "Nhập Môn Lập Trình": {
+                skills: ["Cú pháp cơ bản (Syntax)", "Biến và Kiểu dữ liệu (Variables & Data Types)", 
+                       "Cấu trúc điều khiển (Control Structures)", "Hàm cơ bản (Basic Functions)"],
+                icon: "📝"
+            },
+            "Kĩ Thuật Lập Trình": {
+                skills: ["Thiết kế thuật toán (Algorithm Design)", "Tối ưu hóa mã nguồn (Code Optimization)",
+                       "Xử lý lỗi và Debugging (Error Handling)", "Lập trình có cấu trúc (Structured Programming)"],
+                icon: "⚙️"
+            },
+            "Cấu trúc Dữ Liệu và Giải Thuật": {
+                skills: ["Mảng (Arrays)", "Danh sách liên kết (Linked Lists)",
+                       "Stack và Queue", "Cây (Trees)"],
+                icon: "🌳"
+            },
+            "Lập Trình Hướng Đối Tượng": {
+                skills: ["Lớp và Đối tượng (Classes & Objects)", "Kế thừa (Inheritance)",
+                       "Đa hình (Polymorphism)", "Đóng gói (Encapsulation)"],
+                icon: "🎯"
+            }
+        };
+        
+        // Mapping tên môn học giữa API chi tiết và API danh sách
+        const COURSE_NAME_MAPPING = {
+            "Cấu Trúc Dữ Liệu": "Cấu trúc Dữ Liệu và Giải Thuật",
+            "Kỹ Thuật Lập Trình": "Kĩ Thuật Lập Trình"
+        };
+
+        function normalizeClass(code) {
+            if (!code) return '';
+            return String(code).replace(/\s+/g, '').toUpperCase();
+        }
+
+        // Initialize view mode and toggle function
+        window.viewMode = 'table';  // Default view mode
+        
+        // Toggle between table and grid views
+        function toggleViewMode() {
+            console.log('=== toggleViewMode called ===');
+            window.viewMode = window.viewMode === 'table' ? 'grid' : 'table';
+            localStorage.setItem('viewMode', window.viewMode); // Lưu lại chế độ xem
+            const btn = document.getElementById('toggleViewBtn');
+            btn.textContent = window.viewMode === 'table' ? '🗒️ Chế độ: Danh sách' : '🔲 Chế độ: Lưới';
+            // Re-render students
+            if (allStudents && allStudents.length > 0) {
+                console.log('Re-rendering with lastRenderedStudents:', lastRenderedStudents ? lastRenderedStudents.length : 'null');
+                renderStudentList(lastRenderedStudents || allStudents);
+            }
+        }
+
+        // Search students by name or student ID
+        function searchStudents() {
+            const searchTerm = (document.getElementById('studentSearchInput').value || '').trim().toLowerCase();
+            
+            if (!allStudents || allStudents.length === 0) {
+                return;
+            }
+            
+            if (!searchTerm) {
+                // Nếu không có từ khóa, hiển thị tất cả sinh viên
+                renderStudentList(allStudents);
+                return;
+            }
+            
+            // Lọc sinh viên theo tên hoặc MSSV
+            const filteredStudents = allStudents.filter(student => {
+                const name = (student.name || '').toLowerCase();
+                const studentId = String(student.student_id || '').toLowerCase();
+                const studentClass = (student.class || student.csv_data?.class || '').toLowerCase();
+                
+                return name.includes(searchTerm) || 
+                       studentId.includes(searchTerm) ||
+                       studentClass.includes(searchTerm);
+            });
+            
+            renderStudentList(filteredStudents);
+            
+            // Scroll xuống danh sách
+            setTimeout(() => {
+                const studentsList = document.getElementById('studentsList');
+                if (studentsList) {
+                    studentsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, 100);
+        }
+
+        // Search by class using the input field (calls API)
+        async function searchByClass() {
+            const raw = document.getElementById('classSearchInput').value || '';
+            const cls = normalizeClass(raw);
+            if (!cls) {
+                alert('Vui lòng nhập mã lớp hợp lệ.');
+                return;
+            }
+            // Select the class in the dropdown too
+            const select = document.getElementById('classFilter');
+            select.value = cls;
+            // Use existing filterByClass logic (it will fetch by class)
+            await filterByClass();
+        }
+
+        // Toggle Save Menu
+        function toggleSaveMenu() {
+            const menu = document.getElementById('saveMenu');
+            menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+        }
+        
+        // Close menu when clicking outside
+        document.addEventListener('click', function(e) {
+            const dropdown = document.querySelector('.save-dropdown');
+            const menu = document.getElementById('saveMenu');
+            if (dropdown && menu && !dropdown.contains(e.target)) {
+                menu.style.display = 'none';
+            }
+        });
+        
+        // Save all data to Supabase
+        async function saveAllToSupabase() {
+            toggleSaveMenu();
+            
+            const saveBtn = document.getElementById('saveBtn');
+            const originalText = saveBtn.textContent;
+            saveBtn.textContent = '⏳ Đang lưu...';
+            saveBtn.disabled = true;
+            
+            try {
+                // Gọi API để sync lên Supabase
+                const response = await fetch('/api/sync-supabase', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`✅ Đã lưu thành công lên Supabase!\n\n` +
+                          `📊 Thống kê:\n` +
+                          `• Sinh viên: ${result.stats?.students || 0}\n` +
+                          `• Điểm môn học: ${result.stats?.course_scores || 0}\n` +
+                          `• Đánh giá kỹ năng: ${result.stats?.skill_evaluations || 0}\n` +
+                          `• Phân loại: ${result.stats?.classifications || 0}\n` +
+                          `• Điểm tích hợp: ${result.stats?.integrated_scores || 0}\n` +
+                          `• Chi tiết bài tập: ${result.stats?.exercise_details || 0}`);
+                } else {
+                    alert('❌ Lỗi khi lưu: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('❌ Lỗi kết nối: ' + error.message);
+            } finally {
+                saveBtn.textContent = originalText;
+                saveBtn.disabled = false;
+            }
+        }
+
+        // Download currently displayed students grouped by class as CSV
+        // Download current filtered list as CSV
+        function downloadCurrentList() {
+            const students = lastRenderedStudents && lastRenderedStudents.length ? lastRenderedStudents : allStudents;
+            if (!students || students.length === 0) {
+                alert('Không có sinh viên để lưu.');
+                return;
+            }
+
+            // Build CSV content with BOM for UTF-8
+            const lines = [];
+            const header = ['STT','MSSV','Ho Ten','Lop','Khoa','Diem TB','Thoi Gian TB (h)','Tham Gia (%)','Nop Muon','Muc Do','Bat Thuong'];
+            lines.push(header.join(','));
+
+            students.forEach((s, index) => {
+                // Tính điểm và thời gian trung bình
+                let totalScore = 0;
+                let totalTime = 0;
+                let courseCount = 0;
+                
+                if (s.courses) {
+                    Object.values(s.courses).forEach(course => {
+                        if (course.score !== undefined) {
+                            totalScore += course.score;
+                            courseCount++;
+                        }
+                        if (course.time_minutes !== undefined) {
+                            totalTime += course.time_minutes;
+                        }
+                    });
+                }
+                
+                const avgScore = courseCount > 0 ? (totalScore / courseCount) : "N/A";
+                const avgTimeHours = courseCount > 0 ? (totalTime / courseCount / 60).toFixed(1) : "0";
+                const attendance = s.csv_data?.attendance_rate ? (parseFloat(s.csv_data.attendance_rate) * 100).toFixed(0) : "N/A";
+                const lateSubmissions = s.csv_data?.late_submissions || 0;
+                const cls = s.class || s.csv_data?.class || '';
+                
+                // Ưu tiên final_level từ server
+                const level = s.final_level || calculateStudentLevel(s);
+                const levelDisplay = {
+                    'Xuat sac': 'Xuat sac',
+                    'Kha': 'Kha',
+                    'Trung binh': 'Trung binh',
+                    'Yeu': 'Yeu'
+                }[level] || level;
+                
+                const anomaly = s.anomaly_detected ? 'Co' : 'Khong';
+                
+                const row = [
+                    index + 1,
+                    '"' + (s.student_id || '') + '"',
+                    '"' + ((s.name||'').replace(/"/g,'""')) + '"',
+                    '"' + cls + '"',
+                    '"' + (s.Khoa || s.khoa || s.csv_data?.Khoa || 'Khoa Cong Nghe Thong Tin') + '"',
+                    avgScore,
+                    avgTimeHours,
+                    attendance,
+                    lateSubmissions,
+                    '"' + levelDisplay + '"',
+                    '"' + anomaly + '"'
+                ];
+                lines.push(row.join(','));
+            });
+            
+            // Add summary
+            const summary = {
+                'Xuat sac': 0,
+                'Kha': 0,
+                'Trung binh': 0,
+                'Yeu': 0
+            };
+            let anomalyCount = 0;
+            
+            students.forEach(s => {
+                const level = s.final_level || calculateStudentLevel(s);
+                if (summary[level] !== undefined) {
+                    summary[level]++;
+                }
+                if (s.anomaly_detected) {
+                    anomalyCount++;
+                }
+            });
+            
+            lines.push('');
+            lines.push(`"TONG KET:","Tong: ${students.length}","Xuat sac: ${summary['Xuat sac']}","Kha: ${summary['Kha']}","Trung binh: ${summary['Trung binh']}","Yeu: ${summary['Yeu']}","Bat thuong: ${anomalyCount}"`);
+
+            // Add UTF-8 BOM for Excel compatibility
+            const BOM = '\uFEFF';
+            const csvContent = BOM + lines.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const now = new Date();
+            a.download = `danh_sach_sinh_vien_${now.toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            
+            alert(`Đã lưu ${students.length} sinh viên!`);
+        }
+
+        function downloadByClass() {
+            const students = lastRenderedStudents && lastRenderedStudents.length ? lastRenderedStudents : allStudents;
+            if (!students || students.length === 0) {
+                alert('Không có sinh viên để lưu.');
+                return;
+            }
+
+            // Group by normalized class
+            const groups = {};
+            students.forEach(s => {
+                const clsRaw = s.class || s.csv_data?.class || '';
+                const cls = normalizeClass(clsRaw) || 'UNKNOWN';
+                if (!groups[cls]) groups[cls] = [];
+                groups[cls].push(s);
+            });
+
+            // Build CSV content with BOM for UTF-8
+            const lines = [];
+            const header = ['Lop','MSSV','Ho Ten','Khoa','Diem TB','Thoi Gian TB (phut)','Tham Gia (%)','Nop Muon','Muc Do','Bat Thuong'];
+            lines.push(header.join(','));
+
+            Object.keys(groups).sort().forEach(cls => {
+                // Add class header
+                lines.push(`\n"=== ${cls} (${groups[cls].length} sinh vien) ==="`);
+                
+                groups[cls].forEach(s => {
+                    // Tính điểm và thời gian trung bình
+                    let totalScore = 0;
+                    let totalTime = 0;
+                    let courseCount = 0;
+                    
+                    if (s.courses) {
+                        Object.values(s.courses).forEach(course => {
+                            if (course.score !== undefined) {
+                                totalScore += course.score;
+                                courseCount++;
+                            }
+                            if (course.time_minutes !== undefined) {
+                                totalTime += course.time_minutes;
+                            }
+                        });
+                    }
+                    
+                    const avgScore = courseCount > 0 ? (totalScore / courseCount) : "N/A";
+                    const avgTime = courseCount > 0 ? Math.round(totalTime / courseCount) : 0;
+                    const attendance = s.csv_data?.attendance_rate ? (parseFloat(s.csv_data.attendance_rate) * 100).toFixed(0) : "N/A";
+                    const lateSubmissions = s.csv_data?.late_submissions || 0;
+                    
+                    // Ưu tiên final_level từ server
+                    const level = s.final_level || calculateStudentLevel(s);
+                    const levelDisplay = {
+                        'Xuat sac': 'Xuat sac',
+                        'Kha': 'Kha',
+                        'Trung binh': 'Trung binh',
+                        'Yeu': 'Yeu'
+                    }[level] || level;
+                    
+                    const anomaly = s.anomaly_detected ? 'Co' : 'Khong';
+                    
+                    const row = [
+                        '"' + cls + '"',
+                        '"' + (s.student_id || '') + '"',
+                        '"' + ((s.name||'').replace(/"/g,'""')) + '"',
+                        '"' + (s.Khoa || s.khoa || s.csv_data?.Khoa || 'Khoa Cong Nghe Thong Tin') + '"',
+                        avgScore,
+                        avgTime,
+                        attendance,
+                        lateSubmissions,
+                        '"' + levelDisplay + '"',
+                        '"' + anomaly + '"'
+                    ];
+                    lines.push(row.join(','));
+                });
+                
+                // Thống kê lớp
+                const classStats = {
+                    'Xuat sac': 0,
+                    'Kha': 0,
+                    'Trung binh': 0,
+                    'Yeu': 0
+                };
+                let anomalyCount = 0;
+                
+                groups[cls].forEach(s => {
+                    const level = s.final_level || calculateStudentLevel(s);
+                    if (classStats[level] !== undefined) {
+                        classStats[level]++;
+                    }
+                    if (s.anomaly_detected) {
+                        anomalyCount++;
+                    }
+                });
+                
+                lines.push(`\n"Thong ke ${cls}:","Xuat sac: ${classStats['Xuat sac']}","Kha: ${classStats['Kha']}","Trung binh: ${classStats['Trung binh']}","Yeu: ${classStats['Yeu']}","Bat thuong: ${anomalyCount}"`);
+                lines.push(''); // blank line between classes
+            });
+
+            // Add UTF-8 BOM for Excel compatibility
+            const BOM = '\uFEFF';
+            const csvContent = BOM + lines.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const now = new Date();
+            a.download = `danh_sach_sinh_vien_theo_lop_${now.toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            
+            alert(`Đã lưu ${students.length} sinh viên từ ${Object.keys(groups).length} lớp!`);
+        }
+
+        // Lưu danh sách sinh viên theo môn học
+        function downloadByCourse() {
+            const students = lastRenderedStudents && lastRenderedStudents.length ? lastRenderedStudents : allStudents;
+            if (!students || students.length === 0) {
+                alert('Không có sinh viên để lưu.');
+                return;
+            }
+
+            // Group by course
+            const groups = {};
+            Object.keys(COURSES).forEach(courseName => {
+                groups[courseName] = students.filter(s => s.courses && s.courses[courseName]);
+            });
+
+            // Build CSV content with BOM for UTF-8
+            const lines = [];
+            const header = ['Mon Hoc','MSSV','Ho Ten','Lop','Diem','Thoi Gian (phut)','Muc Do','Bat Thuong'];
+            lines.push(header.join(','));
+
+            Object.keys(groups).sort().forEach(courseName => {
+                if (groups[courseName].length === 0) return;
+                
+                // Add course header
+                const courseInfo = COURSES[courseName];
+                lines.push(`\n"=== ${courseName} (${groups[courseName].length} sinh vien) ==="`);
+                
+                groups[courseName].forEach(s => {
+                    const courseData = s.courses[courseName];
+                    const cls = s.class || s.csv_data?.class || '';
+                    const level = s.final_level || calculateStudentLevel(s);
+                    const levelDisplay = {
+                        'Xuat sac': 'Xuat sac',
+                        'Kha': 'Kha',
+                        'Trung binh': 'Trung binh',
+                        'Yeu': 'Yeu'
+                    }[level] || level;
+                    const anomaly = s.anomaly_detected ? 'Co' : 'Khong';
+                    
+                    const row = [
+                        '"' + courseName + '"',
+                        '"' + (s.student_id || '') + '"',
+                        '"' + ((s.name||'').replace(/"/g,'""')) + '"',
+                        '"' + cls + '"',
+                        formatScore(courseData.score),
+                        Math.round(courseData.time_minutes || 0),
+                        '"' + levelDisplay + '"',
+                        '"' + anomaly + '"'
+                    ];
+                    lines.push(row.join(','));
+                });
+                
+                // Thống kê môn học
+                const courseStats = {
+                    'Xuat sac': 0,
+                    'Kha': 0,
+                    'Trung binh': 0,
+                    'Yeu': 0
+                };
+                let anomalyCount = 0;
+                let totalScore = 0;
+                let totalTime = 0;
+                
+                groups[courseName].forEach(s => {
+                    const level = s.final_level || calculateStudentLevel(s);
+                    if (courseStats[level] !== undefined) {
+                        courseStats[level]++;
+                    }
+                    if (s.anomaly_detected) {
+                        anomalyCount++;
+                    }
+                    const courseData = s.courses[courseName];
+                    totalScore += courseData.score || 0;
+                    totalTime += courseData.time_minutes || 0;
+                });
+                
+                const avgScore = (totalScore / groups[courseName].length).toFixed(1);
+                const avgTime = Math.round(totalTime / groups[courseName].length);
+                
+                lines.push(`\n"Thong ke ${courseName}:","Diem TB: ${avgScore}","Thoi gian TB: ${avgTime}m","Xuat sac: ${courseStats['Xuat sac']}","Kha: ${courseStats['Kha']}","Trung binh: ${courseStats['Trung binh']}","Yeu: ${courseStats['Yeu']}","Bat thuong: ${anomalyCount}"`);
+                lines.push(''); // blank line between courses
+            });
+
+            // Add UTF-8 BOM for Excel compatibility
+            const BOM = '\uFEFF';
+            const csvContent = BOM + lines.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const now = new Date();
+            a.download = `danh_sach_sinh_vien_theo_mon_${now.toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            
+            const courseCount = Object.keys(groups).filter(c => groups[c].length > 0).length;
+            alert(`Đã lưu ${students.length} sinh viên từ ${courseCount} môn học!`);
+        }
+
+        // Tải bảng điểm chi tiết (điểm từng môn + kỹ năng)
+        function downloadScoreReport() {
+            const students = lastRenderedStudents && lastRenderedStudents.length ? lastRenderedStudents : allStudents;
+            if (!students || students.length === 0) {
+                alert('Không có sinh viên để lưu.');
+                return;
+            }
+
+            // Build CSV content with BOM for UTF-8
+            const lines = [];
+            
+            // Header với tất cả các môn và kỹ năng
+            const header = [
+                'STT', 'MSSV', 'Ho Ten', 'Lop', 'Khoa',
+                'Diem TB', 'Diem Tich Hop', 'Muc Do', 'Bat Thuong',
+                // Điểm từng môn
+                'NMLT', 'KTLT', 'CTDL', 'OOP',
+                // Điểm giữa kỳ, cuối kỳ, bài tập
+                'Giua Ky', 'Cuoi Ky', 'Bai Tap',
+                // Thông tin khác
+                'Tham Gia (%)', 'Gio Hoc/Tuan', 'Nop Muon'
+            ];
+            lines.push(header.join(','));
+
+            students.forEach((s, index) => {
+                // Tính điểm trung bình
+                let totalScore = 0;
+                let courseCount = 0;
+                const courseScores = {};
+                
+                const courseNames = ['Nhập Môn Lập Trình', 'Kĩ Thuật Lập Trình', 'Cấu trúc Dữ Liệu và Giải Thuật', 'Lập Trình Hướng Đối Tượng'];
+                const courseKeys = ['NMLT', 'KTLT', 'CTDL', 'OOP'];
+                
+                courseNames.forEach((name, i) => {
+                    if (s.courses && s.courses[name]) {
+                        courseScores[courseKeys[i]] = s.courses[name].score || 0;
+                        totalScore += s.courses[name].score || 0;
+                        courseCount++;
+                    } else {
+                        courseScores[courseKeys[i]] = 'N/A';
+                    }
+                });
+                
+                const avgScore = courseCount > 0 ? (totalScore / courseCount).toFixed(1) : 'N/A';
+                const integratedScore = s.integrated_score || avgScore;
+                
+                const cls = s.class || s.csv_data?.class || '';
+                const khoa = s.Khoa || s.csv_data?.Khoa || '';
+                const level = s.final_level || calculateStudentLevel(s);
+                const anomaly = s.anomaly_detected ? 'Co' : 'Khong';
+                
+                const csvData = s.csv_data || {};
+                const attendance = csvData.attendance_rate ? (parseFloat(csvData.attendance_rate) * 100).toFixed(0) : 'N/A';
+                const studyHours = csvData.study_hours_per_week || 'N/A';
+                const lateSubmissions = csvData.late_submissions || 0;
+                const midterm = csvData.midterm_score || 'N/A';
+                const final = csvData.final_score || 'N/A';
+                const homework = csvData.homework_score || 'N/A';
+                
+                const row = [
+                    index + 1,
+                    '"' + (s.student_id || '') + '"',
+                    '"' + ((s.name||'').replace(/"/g,'""')) + '"',
+                    '"' + cls + '"',
+                    '"' + khoa + '"',
+                    avgScore,
+                    integratedScore,
+                    '"' + level + '"',
+                    '"' + anomaly + '"',
+                    courseScores['NMLT'],
+                    courseScores['KTLT'],
+                    courseScores['CTDL'],
+                    courseScores['OOP'],
+                    midterm,
+                    final,
+                    homework,
+                    attendance,
+                    studyHours,
+                    lateSubmissions
+                ];
+                lines.push(row.join(','));
+            });
+
+            // Thêm thống kê cuối file
+            lines.push('');
+            lines.push('"=== THONG KE TONG HOP ==="');
+            
+            // Tính thống kê
+            const stats = { 'Xuat sac': 0, 'Kha': 0, 'Trung binh': 0, 'Yeu': 0 };
+            let anomalyCount = 0;
+            let totalAvg = 0;
+            
+            students.forEach(s => {
+                const level = s.final_level || calculateStudentLevel(s);
+                if (stats[level] !== undefined) stats[level]++;
+                if (s.anomaly_detected) anomalyCount++;
+                
+                let sum = 0, count = 0;
+                if (s.courses) {
+                    Object.values(s.courses).forEach(c => {
+                        if (c.score) { sum += c.score; count++; }
+                    });
+                }
+                if (count > 0) totalAvg += sum / count;
+            });
+            
+            const avgAll = (totalAvg / students.length).toFixed(2);
+            
+            lines.push(`"Tong sinh vien:",${students.length}`);
+            lines.push(`"Diem trung binh:",${avgAll}`);
+            lines.push(`"Xuat sac:",${stats['Xuat sac']}`);
+            lines.push(`"Kha:",${stats['Kha']}`);
+            lines.push(`"Trung binh:",${stats['Trung binh']}`);
+            lines.push(`"Yeu:",${stats['Yeu']}`);
+            lines.push(`"Bat thuong:",${anomalyCount}`);
+
+            // Add UTF-8 BOM for Excel compatibility
+            const BOM = '\uFEFF';
+            const csvContent = BOM + lines.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const now = new Date();
+            a.download = `bang_diem_chi_tiet_${now.toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            
+            alert(`Đã tải bảng điểm chi tiết của ${students.length} sinh viên!`);
+        }
+
+        function updateClassFilter() {
+            const select = document.getElementById('classFilter');
+            const currentValue = select.value;
+            
+            // Cập nhật danh sách lớp
+            uniqueClasses.clear();
+            allStudents.forEach(student => {
+                const classValue = student.class || student.csv_data?.class;
+                const norm = normalizeClass(classValue);
+                if (norm) uniqueClasses.add(norm);
+            });
+            
+            // Tạo options
+            const options = ['<option value="">🏫 Tất cả lớp</option>'];
+            Array.from(uniqueClasses).sort().forEach(cls => {
+                options.push(`<option value="${cls}" ${cls === currentValue ? 'selected' : ''}>${cls}</option>`);
+            });
+            
+            select.innerHTML = options.join('');
+        }
+
+        async function filterByClass() {
+            const rawClassValue = document.getElementById('classFilter').value;
+            const classValue = normalizeClass(rawClassValue);
+            currentClass = classValue;
+            
+            try {
+                const [studentsRes, statsRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/students${classValue ? `?class=${encodeURIComponent(classValue)}` : ''}`),
+                        fetch(`${API_BASE}/api/statistics${classValue ? `?class=${encodeURIComponent(classValue)}` : ''}`)
+                ]);
+
+                const studentsData = await studentsRes.json();
+                const statsData = await statsRes.json();
+
+                // Cập nhật dữ liệu
+                allStudents = studentsData.students || [];
+                window.studentsData = allStudents; // Lưu vào global để dùng cho updateScoreTable
+                skillEvaluations = studentsData.skill_evaluations || {};
+                
+                // Nhóm theo môn học
+                Object.keys(COURSES).forEach(courseName => {
+                    coursesData[courseName] = allStudents.filter(s => 
+                        s.courses && s.courses[courseName]
+                    );
+                });
+
+                // Cập nhật giao diện
+                displayStatistics(statsData);
+                drawCourseScoreChart(allStudents, skillEvaluations);
+                drawSkillPassChart(allStudents, skillEvaluations);
+                drawTimeChart(allStudents);
+                // Hiển thị danh sách sinh viên ban đầu (không lọc)
+                renderStudentList(allStudents);
+                
+                // Tự động scroll xuống phần danh sách sinh viên
+                setTimeout(() => {
+                    const studentsList = document.getElementById('studentsList');
+                    if (studentsList) {
+                        studentsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                }, 100);
+                
+                if (currentCourse) {
+                    displayCourseContent(currentCourse);
+                }
+            } catch (error) {
+                console.error('Error filtering by class:', error);
+                alert('Lỗi khi lọc theo lớp: ' + error.message);
+            }
+        }
+
+        // Lọc sinh viên theo môn học
+        function filterByCourse() {
+            const courseFilter = document.getElementById('courseFilter');
+            const selectedCourse = courseFilter.value;
+            
+            console.log('Filtering by course:', selectedCourse);
+            
+            if (!selectedCourse) {
+                // Hiển thị tất cả sinh viên
+                renderStudentList(allStudents);
+                return;
+            }
+            
+            // Lọc sinh viên có học môn này
+            const filteredStudents = allStudents.filter(student => {
+                return student.courses && student.courses[selectedCourse];
+            });
+            
+            console.log(`Found ${filteredStudents.length} students for course ${selectedCourse}`);
+            
+            // Hiển thị danh sách đã lọc
+            renderStudentList(filteredStudents);
+            
+            // Tự động scroll xuống phần danh sách sinh viên
+            setTimeout(() => {
+                const studentsList = document.getElementById('studentsList');
+                if (studentsList) {
+                    studentsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, 100);
+        }
+
+        // Cập nhật dropdown môn học
+        function updateCourseFilter() {
+            const courseFilter = document.getElementById('courseFilter');
+            if (!courseFilter) return;
+            
+            const currentValue = courseFilter.value;
+            
+            // Tạo options
+            let options = '<option value="">📚 Tất cả môn học</option>';
+            
+            Object.keys(COURSES).forEach(courseName => {
+                const courseInfo = COURSES[courseName];
+                const studentCount = allStudents.filter(s => s.courses && s.courses[courseName]).length;
+                options += `<option value="${courseName}">${courseInfo.icon} ${courseName} (${studentCount})</option>`;
+            });
+            
+            courseFilter.innerHTML = options;
+            
+            // Giữ lại giá trị đã chọn nếu có
+            if (currentValue && Object.keys(COURSES).includes(currentValue)) {
+                courseFilter.value = currentValue;
+            }
+        }
+
+        async function classifyStudents() {
+            // Ensure we have the latest students loaded so we can classify ALL of them
+            try {
+                await loadStudents();
+            } catch (e) {
+                console.warn('Could not refresh students before classify:', e);
+            }
+
+            // Determine number of students to classify: use current loaded list (allStudents)
+            const totalToClassify = (allStudents && allStudents.length) ? allStudents.length : (parseInt(document.getElementById('numStudents').value) || 50);
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = `⏳ Đang phân loại ${totalToClassify} sinh viên...`;
+            statusEl.style.background = '#fff3cd';
+            statusEl.style.color = '#856404';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/classify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ n_students: totalToClassify })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    statusEl.textContent = `✅ Đã phân loại ${data.statistics.total || totalToClassify} sinh viên`;
+                    statusEl.style.background = '#d4edda';
+                    statusEl.style.color = '#155724';
+                    // Refresh data after classification
+                    await loadStudents();
+                } else {
+                    statusEl.textContent = `❌ Lỗi: ${data.error}`;
+                    statusEl.style.background = '#f8d7da';
+                    statusEl.style.color = '#721c24';
+                }
+            } catch (error) {
+                statusEl.textContent = `❌ Lỗi: ${error.message}`;
+                statusEl.style.background = '#f8d7da';
+                statusEl.style.color = '#721c24';
+            }
+        }
+
+        async function loadStudents() {
+            try {
+                const [studentsRes, statsRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/students`),
+                    fetch(`${API_BASE}/api/statistics`)
+                ]);
+
+                const studentsData = await studentsRes.json();
+                const statsData = await statsRes.json();
+
+                allStudents = studentsData.students || [];
+                window.studentsData = allStudents; // Lưu vào global để dùng cho updateScoreTable
+                skillEvaluations = studentsData.skill_evaluations || {};
+                
+                // Debug: kiểm tra anomaly_detected
+                const anomalyStudents = allStudents.filter(s => s.anomaly_detected);
+                console.log('Total students:', allStudents.length);
+                console.log('Anomaly students:', anomalyStudents.length);
+                
+                // Cập nhật danh sách lớp và môn học
+                updateClassFilter();
+                updateCourseFilter();
+
+                // Hiển thị thống kê và biểu đồ
+                displayStatistics(statsData);
+                drawCourseScoreChart(allStudents, skillEvaluations);
+                drawSkillPassChart(allStudents, skillEvaluations);
+                drawTimeChart(allStudents);
+                
+                // Hiển thị danh sách sinh viên
+                renderStudentList(allStudents);
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('courseContent').innerHTML = 
+                    '<div class="loading">❌ Lỗi khi tải dữ liệu</div>';
+            }
+        }
+
+        let levelChart = null;
+        let courseScoreChart = null;
+        let skillPassChart = null;
+        let timeChart = null;
+
+        // Hiện trạng lọc theo level trên client
+        let currentLevelFilter = '';
+
+        // Lấy level nội bộ của 1 student (chuẩn hóa các trường khác nhau)
+        function studentLevelOf(s) {
+            if (!s) return null;
+            const candidates = [s.final_level, s.level_prediction, s.predicted_level, s.base_level, s.predictedLevel];
+            for (let v of candidates) {
+                if (!v) continue;
+                const sNorm = String(v).toLowerCase().replace(/\s+/g, '');
+                if (sNorm.startsWith('xuatsac') || sNorm === 'xuatsac' || sNorm === 'xuatsach' || sNorm === 'gioi') return 'Xuat sac';
+                if (sNorm.startsWith('kha')) return 'Kha';
+                if (sNorm.startsWith('trung') || sNorm.startsWith('trungbinh')) return 'Trung binh';
+                if (sNorm.startsWith('yeu') || sNorm.startsWith('kem')) return 'Yeu';
+            }
+            return null;
+        }
+
+        // Áp dụng lọc theo level: truyền key nội bộ ('Xuat sac','Kha','Trung binh','Yeu') hoặc '' để bỏ lọc
+        function applyLevelFilter(levelKey) {
+            console.log('=== applyLevelFilter called ===');
+            console.log('Level key:', levelKey);
+            
+            // Toggle: nếu click lại cùng mức thì bỏ lọc
+            if (currentLevelFilter === levelKey) levelKey = '';
+            currentLevelFilter = levelKey;
+
+            // Lọc danh sách sinh viên hiện tại trên client - DÙNG calculateStudentLevel() thay vì studentLevelOf()
+            let filtered;
+            if (currentLevelFilter === 'anomaly') {
+                filtered = allStudents.filter(s => s.anomaly_detected);
+            } else if (currentLevelFilter) {
+                filtered = allStudents.filter(s => (s.final_level || calculateStudentLevel(s)) === currentLevelFilter);
+            } else {
+                filtered = allStudents.slice();
+            }
+
+            console.log('applyLevelFilter - Filtered count:', filtered.length);
+            
+            // Hiển thị danh sách sinh viên được lọc
+            renderStudentList(filtered);
+
+            // Cập nhật các dữ liệu phụ thuộc (biểu đồ, nội dung môn học)
+            Object.keys(COURSES).forEach(courseName => {
+                coursesData[courseName] = filtered.filter(s => s.courses && s.courses[courseName]);
+            });
+
+            // Vẽ lại các biểu đồ theo danh sách đã lọc
+            drawCourseScoreChart(filtered, skillEvaluations);
+            drawSkillPassChart(filtered, skillEvaluations);
+            drawTimeChart(filtered);
+
+            // Nếu đang hiển thị nội dung 1 môn, cập nhật lại
+            if (currentCourse) displayCourseContent(currentCourse);
+
+            // Nếu có phần hiển thị danh sách sinh viên, cuộn tới đó (nếu có)
+            const listEl = document.getElementById('studentsList') || document.getElementById('courseContent');
+            if (listEl) listEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // Expose to global scope for inline onclick handlers
+        window.applyLevelFilter = applyLevelFilter;
+        window.studentLevelOf = studentLevelOf;
+
+        // Event delegation đã bị vô hiệu hóa vì chúng ta dùng onclick trực tiếp trong HTML
+        // document.addEventListener('click', function (e) {
+        //     const card = e.target.closest && e.target.closest('#statsContainer .stat-card');
+        //     if (!card) return;
+        //     const lvl = card.getAttribute('data-level') || '';
+        //     applyLevelFilter(lvl === 'all' ? '' : lvl);
+        // });
+
+        function displayStatistics(stats) {
+            const container = document.getElementById('statsContainer');
+            const levelNames = {
+                'Xuat sac': 'Xuất sắc',
+                'Kha': 'Khá',
+                'Trung binh': 'Trung bình',
+                'Yeu': 'Yếu'
+            };
+
+            // Tính lại thống kê dựa trên calculateStudentLevel()
+            const recalculatedCounts = {
+                'Xuat sac': 0,
+                'Kha': 0,
+                'Trung binh': 0,
+                'Yeu': 0
+            };
+            
+            let anomalyCount = 0;
+            
+            // Hàm kiểm tra bất thường (giống trang chi tiết)
+            function isAnomaly(student) {
+                // Nếu server đã đánh dấu
+                if (student.anomaly_detected) return true;
+                
+                // Tính toán dựa trên điểm và thời gian
+                const courses = student.courses || {};
+                const courseKeys = Object.keys(courses);
+                if (courseKeys.length === 0) return false;
+                
+                const avgScore = courseKeys.reduce((sum, k) => sum + (courses[k].score || 0), 0) / courseKeys.length;
+                const avgTime = courseKeys.reduce((sum, k) => sum + (courses[k].time_minutes || 0), 0) / courseKeys.length;
+                const timeInHours = avgTime / 60;
+                
+                // Điểm cao bất thường với thời gian thấp
+                if (avgScore >= 9.5 && timeInHours < 4) return true;
+                if (avgScore >= 9.0 && timeInHours < 2) return true;
+                if (avgScore >= 8.5 && timeInHours < 1.5) return true;
+                
+                return false;
+            }
+            
+            if (allStudents && allStudents.length > 0) {
+                allStudents.forEach(student => {
+                    const level = student.final_level || calculateStudentLevel(student);
+                    if (recalculatedCounts[level] !== undefined) {
+                        recalculatedCounts[level]++;
+                    }
+                    if (isAnomaly(student)) {
+                        anomalyCount++;
+                    }
+                });
+            }
+
+            container.innerHTML = `
+                <div class="stat-card" data-level="all" onclick="filterStudentsByLevel('all')" style="cursor:pointer">
+                    <h3>📊 Tổng Số</h3>
+                    <div class="number" style="color: #667eea;">${allStudents?.length || 0}</div>
+                    <p>Sinh viên</p>
+                </div>
+                ${Object.entries(recalculatedCounts).map(([level, count]) => `
+                    <div class="stat-card ${level.toLowerCase().replace(' ', '-')}" data-level="${level}" onclick="filterStudentsByLevel('${level}')" style="cursor:pointer">
+                        <h3>${levelNames[level] || level}</h3>
+                        <div class="number">${count}</div>
+                        <p>Sinh viên</p>
+                    </div>
+                `).join('')}
+                <div class="stat-card" data-level="anomaly" onclick="filterStudentsByLevel('anomaly')" style="cursor:pointer;border-top: 6px solid #f44336;">
+                    <h3>⚠️ Bất Thường</h3>
+                    <div class="number" style="color: #f44336;">${anomalyCount}</div>
+                    <p>Trường hợp</p>
+                </div>
+            `;
+
+            // Vẽ biểu đồ phân bố mức độ với dữ liệu mới
+            const recalculatedStats = {
+                total_students: allStudents?.length || 0,
+                level_counts: recalculatedCounts,
+                anomaly_count: anomalyCount
+            };
+            drawLevelChart(recalculatedStats);
+
+        }
+
+        // Hàm lọc sinh viên theo level
+        function filterStudentsByLevel(level) {
+            console.log('=== filterStudentsByLevel called ===');
+            console.log('Filter level:', level);
+            
+            if (!allStudents || allStudents.length === 0) {
+                console.log('No students available');
+                return;
+            }
+            
+            let filteredStudents = [];
+            
+            if (level === 'all') {
+                // Hiển thị tất cả sinh viên
+                filteredStudents = allStudents;
+            } else if (level === 'anomaly') {
+                // Hiển thị sinh viên bất thường (dùng cùng logic với thống kê)
+                filteredStudents = allStudents.filter(s => {
+                    if (s.anomaly_detected) return true;
+                    
+                    const courses = s.courses || {};
+                    const courseKeys = Object.keys(courses);
+                    if (courseKeys.length === 0) return false;
+                    
+                    const avgScore = courseKeys.reduce((sum, k) => sum + (courses[k].score || 0), 0) / courseKeys.length;
+                    const avgTime = courseKeys.reduce((sum, k) => sum + (courses[k].time_minutes || 0), 0) / courseKeys.length;
+                    const timeInHours = avgTime / 60;
+                    
+                    if (avgScore >= 9.5 && timeInHours < 4) return true;
+                    if (avgScore >= 9.0 && timeInHours < 2) return true;
+                    if (avgScore >= 8.5 && timeInHours < 1.5) return true;
+                    
+                    return false;
+                });
+            } else {
+                // Lọc theo level cụ thể
+                filteredStudents = allStudents.filter(s => {
+                    const studentLevel = s.final_level || calculateStudentLevel(s);
+                    const match = studentLevel === level;
+                    if (!match && level === 'Yeu') {
+                        console.log('Student:', s.name, '| Level:', studentLevel, '| Expected:', level, '| Match:', match);
+                    }
+                    return match;
+                });
+            }
+            
+            console.log('Total students:', allStudents.length);
+            console.log('Filtered students count:', filteredStudents.length);
+            
+            // Render lại danh sách sinh viên đã lọc
+            renderStudentList(filteredStudents);
+            
+            // Tự động scroll xuống phần danh sách sinh viên
+            setTimeout(() => {
+                const studentsList = document.getElementById('studentsList');
+                if (studentsList) {
+                    studentsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, 100);
+        }
+
+        // Render danh sách sinh viên (bảng) vào #studentsList
+        function renderStudentList(students) {
+            console.log('=== renderStudentList called ===');
+            console.log('Students to render:', students ? students.length : 0);
+            
+            const container = document.getElementById('studentsList');
+            if (!container) {
+                console.log('Container not found!');
+                return;
+            }
+            // remember last rendered for download/toggle
+            lastRenderedStudents = students || [];
+            if (!students || students.length === 0) {
+                container.innerHTML = `
+                    <div style="background:white;padding:32px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,0.08);text-align:center">
+                        <div style="font-size:48px;margin-bottom:16px">📚</div>
+                        <h3 style="margin:0 0 8px 0;color:#374151;font-size:20px">Không có sinh viên</h3>
+                        <p style="color:#6b7280;margin:0">Hãy thử thay đổi bộ lọc hoặc thêm sinh viên mới</p>
+                    </div>`;
+                return;
+            }
+            if (viewMode === 'table') {
+                const rows = students.map(s => {
+                    const lvl = s.final_level || calculateStudentLevel(s); // Ưu tiên final_level từ server
+                    const cls = s.class || s.csv_data?.class || '';
+                    const khoa = s.Khoa || s.khoa || s.csv_data?.Khoa || 'Khoa Công Nghệ Thông Tin';
+                    
+                    // Tính điểm và thời gian trung bình
+                    let totalScore = 0;
+                    let totalTime = 0;
+                    let courseCount = 0;
+                    Object.keys(COURSES).forEach(courseName => {
+                        if (s.courses && s.courses[courseName]) {
+                            totalScore += s.courses[courseName].score || 0;
+                            totalTime += s.courses[courseName].time_minutes || 0;
+                            courseCount++;
+                        }
+                    });
+                    const avgScore = courseCount > 0 ? (totalScore / courseCount) : "N/A";
+                    // Dùng tổng thời gian để đồng nhất với modal chi tiết
+                    const timeInHours = totalTime / 60;
+
+                    // Xác định màu nền dựa trên level
+                    const levelColorClass = {
+                        'Xuat sac': 'background:rgba(76,175,80,0.1)',
+                        'Kha': 'background:rgba(33,150,243,0.1)',
+                        'Trung binh': 'background:rgba(255,152,0,0.1)',
+                        'Yeu': 'background:rgba(244,67,54,0.1)'
+                    }[lvl] || '';
+
+                    return `
+                        <tr style="border-bottom:1px solid #eee;${levelColorClass}">
+                            <td style="padding:12px;font-weight:500">${s.student_id || ''}</td>
+                            <td style="padding:12px">
+                                <div style="font-weight:500">${(s.name||'').replace(/</g,'&lt;')}</div>
+                                <div style="font-size:12px;color:#666;margin-top:4px">
+                                    Điểm TB: ${parseFloat(avgScore).toFixed(1)}/10 | Thời gian học: ${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m
+                                </div>
+                            </td>
+                            <td style="padding:12px">
+                                <div style="font-weight:500">${cls}</div>
+                                <div style="font-size:12px;color:#666;margin-top:4px">${khoa}</div>
+                            </td>
+                            <td style="padding:12px">
+                                <span class="level ${lvl.toLowerCase().replace(/\s+/g,'-')}" 
+                                      style="display:inline-block;padding:6px 12px;border-radius:20px;font-size:13px">
+                                    ${lvl}
+                                </span>
+                            </td>
+                            <td style="padding:12px">
+                                <button onclick="showStudentDetail(${s.student_id})" 
+                                        style="padding:6px 12px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px">
+                                    📖 Chi tiết
+                                </button>
+                            </td>
+                        </tr>`;
+                }).join('');
+
+                container.innerHTML = `
+                    <div style="background:white;padding:20px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,0.08)">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+                            <h3 style="margin:0;color:#374151;font-size:18px">Danh sách sinh viên (${students.length})</h3>
+                        </div>
+                        <div style="overflow:auto;max-height:600px;border-radius:8px;border:1px solid #eee">
+                            <table style="width:100%;border-collapse:collapse;font-size:14px;text-align:left;background:white">
+                                <thead>
+                                    <tr style="background:linear-gradient(135deg,#667eea,#764ba2)">
+                                        <th style="padding:12px;color:white;font-weight:500">MSSV</th>
+                                        <th style="padding:12px;color:white;font-weight:500">Thông tin sinh viên</th>
+                                        <th style="padding:12px;color:white;font-weight:500">Lớp & Khoa</th>
+                                        <th style="padding:12px;color:white;font-weight:500">Mức độ</th>
+                                        <th style="padding:12px;color:white;font-weight:500">Thao tác</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${rows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // Grid cards view
+                const cards = students.map(s => {
+                    const lvl = s.final_level || calculateStudentLevel(s); // Ưu tiên final_level từ server
+                    const cls = s.class || s.csv_data?.class || '';
+                    const khoa = s.Khoa || s.khoa || s.csv_data?.Khoa || 'Khoa Công Nghệ Thông Tin';
+                    const levelClass = lvl.toLowerCase().replace(/\s+/g,'-');
+                    
+                    // Tính điểm và thời gian trung bình cho tất cả môn học
+                    let totalScore = 0;
+                    let totalTime = 0;
+                    let courseCount = 0;
+                    
+                    Object.keys(COURSES).forEach(courseName => {
+                        if (s.courses && s.courses[courseName]) {
+                            totalScore += s.courses[courseName].score || 0;
+                            totalTime += s.courses[courseName].time_minutes || 0;
+                            courseCount++;
+                        }
+                    });
+                    
+                    const avgScore = courseCount > 0 ? (totalScore / courseCount) : "N/A";
+                    // Dùng tổng thời gian để đồng nhất với modal chi tiết
+                    const timeInHours = totalTime / 60;
+                    
+                    return `
+                        <div class="student-card">
+                            <h3>${(s.name||'').replace(/</g,'&lt;')}</h3>
+                            <div style="margin:12px 0;font-weight:600;color:#4B5563">MSSV: ${s.student_id || ''}</div>
+                            <div style="margin:8px 0;color:#6B7280">Lớp: <strong>${cls}</strong></div>
+                            <div style="margin:8px 0;color:#6B7280">Khoa: <strong>${khoa}</strong></div>
+                            <div style="margin:8px 0;color:#6B7280">Điểm TB: <strong>${parseFloat(avgScore).toFixed(1)}/10</strong></div>
+                            <div style="margin:8px 0;color:#6B7280">Thời gian học: <strong>${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m</strong></div>
+                            <div style="margin:12px 0">
+                                <span class="level ${levelClass}" style="display:inline-block;padding:6px 12px;border-radius:20px">${lvl}</span>
+                            </div>
+                            <div style="margin-top:16px">
+                                <button onclick="showStudentDetail(${s.student_id})" style="width:100%;padding:8px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;border:none;border-radius:8px;cursor:pointer">
+                                    📖 Xem chi tiết
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                container.innerHTML = `
+                    <div style="background:white;padding:20px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,0.08)">
+                        <h3 style="margin:0 0 20px 0;color:#374151">Danh sách sinh viên (${students.length})</h3>
+                        <div class="students-grid">
+                            ${cards}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function drawLevelChart(stats) {
+            const ctx = document.getElementById('levelChart');
+            if (!ctx) return;
+
+            // Hủy biểu đồ cũ nếu có
+            if (levelChart) {
+                levelChart.destroy();
+            }
+
+            const levelNames = {
+                'Xuat sac': 'Xuất sắc',
+                'Kha': 'Khá',
+                'Trung binh': 'Trung bình',
+                'Yeu': 'Yếu'
+            };
+
+            const labels = Object.keys(stats.level_counts || {}).map(l => levelNames[l] || l);
+            const data = Object.values(stats.level_counts || {});
+            const colors = ['#4CAF50', '#2196F3', '#FF9800', '#f44336'];
+
+            levelChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Số lượng sinh viên',
+                        data: data,
+                        backgroundColor: colors,
+                        borderColor: colors,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                padding: 15,
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.label || '';
+                                    const value = context.parsed || 0;
+                                    const total = data.reduce((a, b) => a + b, 0);
+                                    const percentage = ((value / total) * 100).toFixed(1);
+                                    return `${label}: ${value} (${percentage}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function drawCourseScoreChart(students, skillEvaluations) {
+            const ctx = document.getElementById('courseScoreChart');
+            if (!ctx || !students || students.length === 0) return;
+
+            // Hủy biểu đồ cũ nếu có
+            if (courseScoreChart) {
+                courseScoreChart.destroy();
+            }
+
+            const courseNames = Object.keys(COURSES);
+            const avgScores = courseNames.map(courseName => {
+                const courseStudents = students.filter(s => s.courses && s.courses[courseName]);
+                if (courseStudents.length === 0) return 0;
+                const total = courseStudents.reduce((sum, s) => sum + (s.courses[courseName].score || 0), 0);
+                return Math.round((total / courseStudents.length) * 10) / 10; // Làm tròn 1 chữ số thập phân
+            });
+
+            courseScoreChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: courseNames.map(name => name.substring(0, 20) + (name.length > 20 ? '...' : '')),
+                    datasets: [{
+                        label: 'Điểm trung bình',
+                        data: avgScores,
+                        backgroundColor: 'rgba(102, 126, 234, 0.7)',
+                        borderColor: 'rgba(102, 126, 234, 1)',
+                        borderWidth: 2,
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 10,
+                            ticks: {
+                                stepSize: 1
+                            },
+                            title: {
+                                display: true,
+                                text: 'Điểm số (0-10)',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        x: {
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const value = Math.round(context.parsed.y * 10) / 10;
+                                    return `Điểm: ${value}/10`;
+                                }
+                            }
+                        }
+                    },
+                    onClick: (event, activeElements) => {
+                        if (activeElements.length > 0) {
+                            const index = activeElements[0].index;
+                            const courseName = courseNames[index];
+                            
+                            // Lọc sinh viên có học môn này
+                            const filteredStudents = students.filter(student => {
+                                return student.courses && student.courses[courseName];
+                            });
+                            
+                            console.log(`Clicked on ${courseName}: ${filteredStudents.length} students`);
+                            renderStudentList(filteredStudents);
+                            
+                            // Scroll xuống danh sách
+                            setTimeout(() => {
+                                const studentsList = document.getElementById('studentsList');
+                                if (studentsList) {
+                                    studentsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                }
+                            }, 100);
+                        }
+                    }
+                }
+            });
+        }
+
+        function drawSkillPassChart(students, skillEvaluations) {
+            const ctx = document.getElementById('skillPassChart');
+            if (!ctx || !students || students.length === 0) return;
+
+            // Hủy biểu đồ cũ nếu có
+            if (skillPassChart) {
+                skillPassChart.destroy();
+            }
+
+            const courseNames = Object.keys(COURSES);
+            const passRates = courseNames.map(courseName => {
+                let totalSkills = 0;
+                let passedSkills = 0;
+                
+                students.forEach(student => {
+                    if (student.courses && student.courses[courseName]) {
+                        const studentId = student.student_id;
+                        let skillInfo = skillEvaluations[studentId]?.[courseName];
+                        
+                        // Nếu không tìm thấy, thử tìm với tên rút gọn hoặc tên khác
+                        if (!skillInfo && skillEvaluations[studentId]) {
+                            const studentSkills = skillEvaluations[studentId];
+                            const possibleNames = Object.keys(studentSkills);
+                            const altName = possibleNames.find(name => 
+                                name.includes(courseName.split(' ')[0]) || courseName.includes(name.split(' ')[0])
+                            );
+                            if (altName) {
+                                skillInfo = studentSkills[altName];
+                            }
+                        }
+                        
+                        if (skillInfo && skillInfo.skills_summary) {
+                            totalSkills += skillInfo.skills_summary.total_skills || 0;
+                            passedSkills += skillInfo.skills_summary.passed_skills || 0;
+                        }
+                    }
+                });
+                
+                return totalSkills > 0 ? (passedSkills / totalSkills * 100) : 0;
+            });
+
+            skillPassChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: courseNames.map(name => name.substring(0, 20) + (name.length > 20 ? '...' : '')),
+                    datasets: [{
+                        label: 'Tỷ lệ kỹ năng đạt (%)',
+                        data: passRates,
+                        backgroundColor: 'rgba(76, 175, 80, 0.2)',
+                        borderColor: 'rgba(76, 175, 80, 1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        pointBackgroundColor: '#4CAF50',
+                        pointBorderColor: '#fff',
+                        pointBorderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Tỷ lệ đạt (%)',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        x: {
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `Tỷ lệ đạt: ${context.parsed.y.toFixed(1)}%`;
+                                }
+                            }
+                        }
+                    },
+                    onClick: (event, activeElements) => {
+                        if (activeElements.length > 0) {
+                            const index = activeElements[0].index;
+                            const courseName = courseNames[index];
+                            
+                            // Lọc sinh viên có học môn này
+                            const filteredStudents = students.filter(student => {
+                                return student.courses && student.courses[courseName];
+                            });
+                            
+                            console.log(`Clicked on ${courseName}: ${filteredStudents.length} students`);
+                            renderStudentList(filteredStudents);
+                            
+                            // Scroll xuống danh sách
+                            setTimeout(() => {
+                                const studentsList = document.getElementById('studentsList');
+                                if (studentsList) {
+                                    studentsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                }
+                            }, 100);
+                        }
+                    }
+                }
+            });
+        }
+
+        function drawTimeChart(students) {
+            const ctx = document.getElementById('timeChart');
+            if (!ctx || !students || students.length === 0) return;
+
+            // Hủy biểu đồ cũ nếu có
+            if (timeChart) {
+                timeChart.destroy();
+            }
+
+            // Phân nhóm thời gian: 0-20, 21-40, 41-60, 61-80, 81+
+            const timeRanges = ['0-20 phút', '21-40 phút', '41-60 phút', '61-80 phút', '81+ phút'];
+            const timeCounts = [0, 0, 0, 0, 0];
+
+            students.forEach(student => {
+                if (student.courses) {
+                    Object.values(student.courses).forEach(course => {
+                        const time = course.time_minutes || 0;
+                        if (time <= 20) timeCounts[0]++;
+                        else if (time <= 40) timeCounts[1]++;
+                        else if (time <= 60) timeCounts[2]++;
+                        else if (time <= 80) timeCounts[3]++;
+                        else timeCounts[4]++;
+                    });
+                }
+            });
+
+            timeChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: timeRanges,
+                    datasets: [{
+                        label: 'Số lượng bài làm',
+                        data: timeCounts,
+                        backgroundColor: [
+                            'rgba(244, 67, 54, 0.7)',
+                            'rgba(255, 152, 0, 0.7)',
+                            'rgba(33, 150, 243, 0.7)',
+                            'rgba(76, 175, 80, 0.7)',
+                            'rgba(102, 126, 234, 0.7)'
+                        ],
+                        borderColor: [
+                            'rgba(244, 67, 54, 1)',
+                            'rgba(255, 152, 0, 1)',
+                            'rgba(33, 150, 243, 1)',
+                            'rgba(76, 175, 80, 1)',
+                            'rgba(102, 126, 234, 1)'
+                        ],
+                        borderWidth: 2,
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            },
+                            title: {
+                                display: true,
+                                text: 'Số lượng',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Khoảng thời gian',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `Số lượng: ${context.parsed.y}`;
+                                }
+                            }
+                        }
+                    },
+                    onClick: (event, activeElements) => {
+                        if (activeElements.length > 0) {
+                            const index = activeElements[0].index;
+                            const timeRange = timeRanges[index];
+                            
+                            // Lọc sinh viên theo khoảng thời gian
+                            const filteredStudents = students.filter(student => {
+                                if (!student.courses) return false;
+                                
+                                // Tính thời gian trung bình
+                                let totalTime = 0;
+                                let count = 0;
+                                Object.values(student.courses).forEach(course => {
+                                    if (course.time_minutes !== undefined) {
+                                        totalTime += course.time_minutes;
+                                        count++;
+                                    }
+                                });
+                                const avgTime = count > 0 ? totalTime / count : 0;
+                                
+                                // Kiểm tra thuộc khoảng nào
+                                if (index === 0) return avgTime <= 20;
+                                else if (index === 1) return avgTime > 20 && avgTime <= 40;
+                                else if (index === 2) return avgTime > 40 && avgTime <= 60;
+                                else if (index === 3) return avgTime > 60 && avgTime <= 80;
+                                else return avgTime > 80;
+                            });
+                            
+                            console.log(`Clicked on ${timeRange}: ${filteredStudents.length} students`);
+                            renderStudentList(filteredStudents);
+                            
+                            // Scroll xuống danh sách
+                            setTimeout(() => {
+                                const studentsList = document.getElementById('studentsList');
+                                if (studentsList) {
+                                    studentsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                }
+                            }, 100);
+                        }
+                    }
+                }
+            });
+        }
+
+        function setupCourseTabs() {
+            const tabsContainer = document.getElementById('courseTabs');
+            tabsContainer.innerHTML = Object.keys(COURSES).map((courseName, index) => `
+                <div class="course-tab ${index === 0 ? 'active' : ''}" 
+                     onclick="switchCourse('${courseName}')">
+                    ${COURSES[courseName].icon} ${courseName}
+                </div>
+            `).join('');
+        }
+
+        function switchCourse(courseName) {
+            currentCourse = courseName;
+            document.querySelectorAll('.course-tab').forEach(tab => {
+                tab.classList.remove('active');
+                if (tab.textContent.includes(courseName)) {
+                    tab.classList.add('active');
+                }
+            });
+            displayCourseContent(courseName);
+        }
+
+        function displayCourseContent(courseName) {
+            const container = document.getElementById('courseContent');
+            const students = coursesData[courseName] || [];
+            const courseInfo = COURSES[courseName];
+            const levelNames = {
+                'Xuat sac': 'Xuất sắc',
+                'Kha': 'Khá',
+                'Trung binh': 'Trung bình',
+                'Yeu': 'Yếu'
+            };
+
+            let content = `
+                <div class="course-content active">
+                    <div class="course-header">
+                        <h2>${courseInfo.icon} ${courseName}</h2>
+                        <p style="color: #666; font-size: 1.1em;">Tổng số sinh viên: ${students.length}</p>
+                    </div>
+            `;
+
+            if (students.length === 0) {
+                content += '<div class="loading">Chưa có dữ liệu sinh viên cho môn học này</div>';
+            } else {
+                content += '<div class="students-grid">';
+                
+                students.forEach(student => {
+                    const studentId = student.student_id;
+                    const finalLevel = student.final_level || 'Unknown';
+                    const levelClass = finalLevel.toLowerCase().replace(' ', '-');
+                    const courseData = student.courses[courseName];
+                    const skillEval = skillEvaluations[studentId]?.[courseName];
+
+                    let skillsHtml = '';
+                    if (skillEval && skillEval.skills) {
+                        const skillsSummary = skillEval.skills_summary || {};
+                        skillsHtml = `
+                            <div class="skills-summary">
+                                <h4>📋 Kỹ năng: ${skillsSummary.passed_skills || 0}/${skillsSummary.total_skills || 4} đạt</h4>
+                                ${Object.entries(skillEval.skills).slice(0, 2).map(([skillName, skillData]) => `
+                                    <div class="skill-item ${skillData.passed ? 'passed' : 'failed'}">
+                                        <span class="skill-name">${skillName}</span>
+                                        <span class="skill-score">${skillData.score}/10</span>
+                                        <span class="skill-status">${skillData.passed ? '✓' : '✗'}</span>
+                                    </div>
+                                `).join('')}
+                                ${Object.keys(skillEval.skills).length > 2 ? 
+                                    `<p style="text-align: center; margin-top: 10px; color: #667eea; cursor: pointer;" 
+                                        onclick="showStudentDetail(${studentId})">Xem thêm...</p>` : ''}
+                            </div>
+                        `;
+                    }
+
+                    content += `
+                        <div class="student-card">
+                            <h3>${student.name || `Sinh viên ${studentId}`}</h3>
+                            <span class="level ${levelClass}">${levelNames[finalLevel] || finalLevel}</span>
+                            
+                            ${student.anomaly_detected ? `
+                                <div class="anomaly">
+                                    ⚠️ ${student.anomaly_reason || 'Phát hiện bất thường'}
+                                </div>
+                            ` : ''}
+                            
+                            <div class="course-info">
+                                <strong>${courseName}</strong><br>
+                                📊 Điểm: <strong style="color: #667eea;">${formatScore(courseData.score)}/10</strong><br>
+                                ⏱️ Thời gian: <strong>${formatNumber(courseData.time_minutes)} phút</strong>
+                            </div>
+                            
+                            ${skillsHtml}
+                            
+                            <button onclick="showStudentDetail(${studentId})" 
+                                    style="margin-top: 15px; width: 100%;">
+                                📖 Xem Chi Tiết Đầy Đủ
+                            </button>
+                        </div>
+                    `;
+                });
+
+                content += '</div>';
+            }
+
+            content += '</div>';
+            container.innerHTML = content;
+        }
+
+        async function showStudentDetail(studentId) {
+            try {
+                const response = await fetch(`${API_BASE}/api/student/${studentId}`);
+                const data = await response.json();
+                
+                const student = data.student;
+                const skillEval = data.skill_evaluations;
+                const levelNames = {
+                    'Xuat sac': 'Xuất sắc',
+                    'Kha': 'Khá',
+                    'Trung binh': 'Trung bình',
+                    'Yeu': 'Yếu'
+                };
+                
+                // Dùng hàm tính level chung
+                const calculatedLevel = calculateStudentLevel(student);
+                
+                // Tính toán các giá trị để hiển thị chi tiết
+                const avgScore = Object.values(student.courses || {}).reduce((sum, course) => sum + (course.score || 0), 0) / Object.keys(student.courses || {}).length;
+                // Tổng thời gian (không phải trung bình)
+                const totalTime = Object.values(student.courses || {}).reduce((sum, course) => sum + (course.time_minutes || 0), 0);
+                const avgTime = totalTime / Object.keys(student.courses || {}).length;
+                const timeInHours = totalTime / 60;
+                const csvData = student.csv_data || {};
+                const attendance = parseFloat(csvData.attendance_rate || 0) * 100;
+                const lateSubmissions = parseInt(csvData.late_submissions || 0);
+                
+                // Tính điểm các yếu tố (để hiển thị trong bảng)
+                let scorePoints = 0;
+                if (avgScore >= 9.0) scorePoints = 35;
+                else if (avgScore >= 8.0) scorePoints = 30;
+                else if (avgScore >= 7.0) scorePoints = 25;
+                else if (avgScore >= 6.0) scorePoints = 20;
+                else if (avgScore >= 5.0) scorePoints = 15;
+                else scorePoints = 8;
+                
+                let timePoints = 0;
+                if (timeInHours >= 15) timePoints = 25;
+                else if (timeInHours >= 12) timePoints = 22;
+                else if (timeInHours >= 10) timePoints = 18;
+                else if (timeInHours >= 8) timePoints = 14;
+                else if (timeInHours >= 5) timePoints = 10;
+                else timePoints = 5;
+                
+                // Tính tổng số bài tập
+                const totalAssignments = Object.keys(student.courses || {}).length * 30;
+                const lateRate = totalAssignments > 0 ? (lateSubmissions / totalAssignments) * 100 : 0;
+                
+                let attendancePoints = 0;
+                if (attendance >= 95) attendancePoints = 20;
+                else if (attendance >= 90) attendancePoints = 18;
+                else if (attendance >= 80) attendancePoints = 15;
+                else if (attendance >= 70) attendancePoints = 12;
+                else if (attendance >= 60) attendancePoints = 8;
+                else attendancePoints = 4;
+                
+                // Kỷ luật - Dựa trên tỷ lệ nộp muộn (tính tuyến tính)
+                let behaviorPoints = Math.max(0, 10 - (lateRate / 5));
+                behaviorPoints = Math.round(behaviorPoints * 10) / 10; // Làm tròn 1 chữ số thập phân
+                
+                const courseScores = Object.values(student.courses || {}).map(c => c.score || 0);
+                const scoreStdDev = courseScores.length > 0 ? 
+                    Math.sqrt(courseScores.reduce((sum, s) => sum + Math.pow(s - avgScore, 2), 0) / courseScores.length) : 0;
+                let consistencyPoints = 0;
+                if (scoreStdDev < 0.5) consistencyPoints = 10;
+                else if (scoreStdDev < 1.0) consistencyPoints = 8;
+                else if (scoreStdDev < 1.5) consistencyPoints = 6;
+                else if (scoreStdDev < 2.0) consistencyPoints = 4;
+                else consistencyPoints = 2;
+                
+                const totalPoints = scorePoints + timePoints + attendancePoints + behaviorPoints + consistencyPoints;
+                
+                // Sử dụng analyzeStudentIssues để tính penalty đồng bộ
+                const analysisForPenalty = analyzeStudentIssues(student);
+                const totalPenalty = analysisForPenalty.totalPenalty;
+                
+                const finalPoints = Math.max(0, totalPoints - totalPenalty);
+                
+                let modalHtml = `
+                    <h2 style="color: #667eea; margin-bottom: 20px;">
+                        📊 ${student.name || `Sinh viên ${studentId}`}
+                    </h2>
+                    
+                    <div style="background: #f8f9fa; padding: 20px; border-radius: 15px; margin-bottom: 20px;">
+                        <h3 style="color: #667eea; margin-bottom: 15px;">🎯 Phân Loại Tổng Quan</h3>
+                        <p><strong>Điểm trung bình:</strong> <span style="color: #667eea; font-weight: bold;">${formatScore(calculateAverageScore(student))}/10</span></p>
+                        <p><strong>Tổng thời gian học:</strong> <span style="color: #667eea; font-weight: bold;">${formatTime(calculateTotalTime(student))}</span></p>
+                        <p><strong>Kết quả đánh giá:</strong> <span class="level ${calculatedLevel.toLowerCase().replace(' ', '-')}">${levelNames[calculatedLevel]}</span></p>
+                        ${explainLevel(student)}
+                        ${(() => {
+                            const analysis = analyzeStudentIssues(student);
+                            if (analysis.hasAnomaly && analysis.issues.length > 0) {
+                                return `
+                                    <div class="anomaly" style="margin-top: 15px;">
+                                        ⚠️ ${analysis.issues.map(i => i.text).join('; ')}
+                                    </div>
+                                `;
+                            }
+                            return '';
+                        })()}
+                        
+                        <div style="margin-top: 20px; padding: 15px; background: white; border-radius: 10px; border-left: 4px solid #667eea;">
+                            <h4 style="color: #667eea; margin-bottom: 10px;">📝 Phân Tích Các Yếu Tố Học Tập (K-means/KNN):</h4>
+                            <div style="color: #444; line-height: 1.8;">
+                                ${(() => {
+                                    // Sử dụng hàm phân tích chung để đồng bộ với phần "Phát hiện bất thường"
+                                    const analysis = analyzeStudentIssues(student);
+                                    let penalties = analysis.issues.map(i => ({
+                                        text: i.text,
+                                        points: i.points,
+                                        severity: i.severity,
+                                        type: i.type || 'warning'
+                                    }));
+                                    
+                                    // Tạo danh sách môn học
+                                    const courseNames = Object.keys(student.courses || {});
+                                    const courseOptions = courseNames.map(name => `<option value="${name}">${name}</option>`).join('');
+                                    
+                                    return `
+                                        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                                <h5 style="color: #667eea; margin: 0;">📊 Các yếu tố được K-means/KNN sử dụng để phân loại</h5>
+                                                <div style="display: flex; align-items: center; gap: 10px;">
+                                                    <label style="font-weight: bold; color: #333;">Lọc theo môn:</label>
+                                                    <select id="courseFilter_${student.student_id}" onchange="updateScoreTable(${student.student_id})" 
+                                                        style="padding: 8px 12px; border: 2px solid #667eea; border-radius: 5px; font-size: 14px; cursor: pointer; background: white;">
+                                                        <option value="all">📚 Tất cả môn</option>
+                                                        ${courseOptions}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            
+                                            <div id="scoreTableContainer_${student.student_id}">
+                                            <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px;">
+                                                <thead>
+                                                    <tr style="background: #667eea; color: white;">
+                                                        <th style="padding: 10px; text-align: left; border-radius: 5px 0 0 0;">Yếu tố</th>
+                                                        <th style="padding: 10px; text-align: center; border-radius: 0 5px 0 0;">Giá trị</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr style="background: white;">
+                                                        <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>📊 Điểm trung bình</strong></td>
+                                                        <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${avgScore >= 8 ? '#28a745' : avgScore >= 6.5 ? '#17a2b8' : avgScore >= 5 ? '#ffc107' : '#dc3545'};">${formatNumber(avgScore)}/10</td>
+                                                    </tr>
+                                                    <tr style="background: #f8f9fa;">
+                                                        <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>⏱️ Tổng thời gian học</strong></td>
+                                                        <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${timeInHours >= 10 ? '#28a745' : timeInHours >= 5 ? '#17a2b8' : '#ffc107'};">${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m</td>
+                                                    </tr>
+                                                    <tr style="background: white;">
+                                                        <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>✅ Tỷ lệ tham dự</strong></td>
+                                                        <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${attendance >= 80 ? '#28a745' : attendance >= 60 ? '#ffc107' : '#dc3545'};">${Math.round(attendance)}%</td>
+                                                    </tr>
+                                                    <tr style="background: #f8f9fa;">
+                                                        <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>📝 Nộp bài trễ</strong></td>
+                                                        <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${lateSubmissions <= 3 ? '#28a745' : lateSubmissions <= 8 ? '#ffc107' : '#dc3545'};">${lateSubmissions} lần</td>
+                                                    </tr>
+                                                    <tr style="background: white;">
+                                                        <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>📈 Tính nhất quán điểm</strong></td>
+                                                        <td style="padding: 10px; text-align: center; border-bottom: 1px solid #ddd; font-weight: bold; color: ${scoreStdDev < 1 ? '#28a745' : scoreStdDev < 2 ? '#ffc107' : '#dc3545'};">${scoreStdDev < 1 ? 'Ổn định' : scoreStdDev < 2 ? 'Trung bình' : 'Không ổn định'}</td>
+                                                    </tr>
+                                                    <tr style="background: ${penalties.length > 0 ? (penalties.some(p => p.type === 'anomaly') ? '#f8d7da' : '#fff3cd') : '#d4edda'};">
+                                                        <td colspan="2" style="padding: 15px; border-radius: 0 0 5px 5px;">
+                                                            ${(() => {
+                                                                const anomalies = penalties.filter(p => p.type === 'anomaly');
+                                                                const warnings = penalties.filter(p => p.type === 'warning' || !p.type);
+                                                                
+                                                                if (anomalies.length > 0) {
+                                                                    // Có bất thường (nghi gian lận)
+                                                                    return '<strong style="color: #dc3545; font-size: 16px;">🚨 Phát hiện ' + anomalies.length + ' bất thường:</strong>' +
+                                                                        '<div style="margin-top: 10px;">' +
+                                                                        anomalies.map((p, idx) => {
+                                                                            let color = p.severity === 'critical' ? '#dc3545' : '#ff6b6b';
+                                                                            return '<div style="background: white; padding: 8px 12px; margin: 5px 0; border-radius: 5px; border-left: 4px solid ' + color + ';"><span style="color: ' + color + '; font-weight: bold;">🚨 ' + (idx + 1) + '. ' + p.text + '</span></div>';
+                                                                        }).join('') +
+                                                                        '</div>' +
+                                                                        (warnings.length > 0 ? '<div style="margin-top: 15px;"><strong style="color: #ffc107; font-size: 14px;">⚠️ Và ' + warnings.length + ' cảnh báo khác:</strong>' +
+                                                                        '<div style="margin-top: 5px;">' +
+                                                                        warnings.map((p, idx) => {
+                                                                            let color = p.severity === 'high' ? '#ff9800' : '#ffc107';
+                                                                            return '<div style="background: #fffbf0; padding: 6px 10px; margin: 3px 0; border-radius: 4px; border-left: 3px solid ' + color + '; font-size: 13px;"><span style="color: ' + color + ';">⚠️ ' + p.text + '</span></div>';
+                                                                        }).join('') +
+                                                                        '</div></div>' : '');
+                                                                } else if (warnings.length > 0) {
+                                                                    // Chỉ có cảnh báo (cần cải thiện)
+                                                                    return '<strong style="color: #ff9800; font-size: 16px;">⚠️ Phát hiện ' + warnings.length + ' vấn đề cần cải thiện:</strong>' +
+                                                                        '<div style="margin-top: 10px;">' +
+                                                                        warnings.map((p, idx) => {
+                                                                            let color = p.severity === 'high' ? '#ff6b6b' : p.severity === 'medium' ? '#ff9800' : '#ffc107';
+                                                                            let icon = p.severity === 'high' ? '⚠️' : p.severity === 'medium' ? '📊' : '💡';
+                                                                            return '<div style="background: white; padding: 8px 12px; margin: 5px 0; border-radius: 5px; border-left: 4px solid ' + color + ';"><span style="color: ' + color + '; font-weight: bold;">' + icon + ' ' + (idx + 1) + '. ' + p.text + '</span></div>';
+                                                                        }).join('') +
+                                                                        '</div>';
+                                                                } else {
+                                                                    // Không có vấn đề
+                                                                    return '<strong style="color: #28a745; font-size: 16px;">✅ Không phát hiện vấn đề</strong>' +
+                                                                        '<div style="margin-top: 5px; color: #666;">Sinh viên có hành vi học tập tốt, không có dấu hiệu bất thường.</div>';
+                                                                }
+                                                            })()}
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                            </div>
+                                        </div>
+                                    `;
+                                })()}
+                            </div>
+                        </div>
+                        
+                        <div style="margin-top: 20px; padding: 15px; background: white; border-radius: 10px; border-left: 4px solid #667eea;">
+                            <h4 style="color: #667eea; margin-bottom: 10px;">💡 Giải thích xếp loại:</h4>
+                            <div style="color: #444; line-height: 1.8;">
+                                ${(() => {
+                                    // Sử dụng hàm phân tích chung để đồng bộ
+                                    const analysis = analyzeStudentIssues(student);
+                                    const { avgScore, timeInHours, totalTime, attendance, lateSubmissions } = analysis.stats;
+                                    const level = calculateStudentLevel(student);
+                                    
+                                    // Hiển thị vấn đề nếu có
+                                    let issuesHtml = '';
+                                    if (analysis.issues.length > 0) {
+                                        issuesHtml = `
+                                            <div style="background: #fff3cd; padding: 12px; border-radius: 8px; border-left: 4px solid #ffc107; margin-bottom: 10px;">
+                                                <strong>⚠️ Phát hiện vấn đề:</strong><br>
+                                                ${analysis.issues.map(i => `• ${i.text}`).join('<br>')}
+                                            </div>
+                                        `;
+                                    }
+                                    
+                                    if (level === 'Xuat sac') {
+                                        return issuesHtml + `
+                                            <div style="background: #d4edda; padding: 12px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 10px;">
+                                                <strong>🎯 Xuất sắc</strong><br>
+                                                • Điểm trung bình: <strong>${formatNumber(avgScore)}/10</strong><br>
+                                                • Thời gian học: <strong>${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m</strong><br>
+                                                • Tham gia: <strong>${Math.round(attendance)}%</strong><br>
+                                                • Nộp muộn: <strong>${lateSubmissions} lần</strong><br>
+                                                • Đánh giá: Kết quả học tập xuất sắc
+                                            </div>
+                                            <div style="background: #e7f3ff; padding: 10px; border-radius: 8px;">
+                                                <strong>💡 Đề xuất:</strong> Tiếp tục duy trì phương pháp học tập hiệu quả.
+                                            </div>
+                                        `;
+                                    } else if (level === 'Kha') {
+                                        return issuesHtml + `
+                                            <div style="background: #d1ecf1; padding: 12px; border-radius: 8px; border-left: 4px solid #17a2b8; margin-bottom: 10px;">
+                                                <strong>🎯 Khá</strong><br>
+                                                • Điểm trung bình: <strong>${formatNumber(avgScore)}/10</strong><br>
+                                                • Thời gian học: <strong>${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m</strong><br>
+                                                • Tham gia: <strong>${Math.round(attendance)}%</strong><br>
+                                                • Nộp muộn: <strong>${lateSubmissions} lần</strong><br>
+                                                • Đánh giá: Kết quả tốt
+                                            </div>
+                                            <div style="background: #e7f3ff; padding: 10px; border-radius: 8px;">
+                                                <strong>💡 Đề xuất:</strong> Tăng cường thực hành để đạt mức xuất sắc.
+                                            </div>
+                                        `;
+                                    } else if (level === 'Trung binh') {
+                                        return issuesHtml + `
+                                            <div style="background: #fff3cd; padding: 12px; border-radius: 8px; border-left: 4px solid #ffc107; margin-bottom: 10px;">
+                                                <strong>🎯 Trung bình</strong><br>
+                                                • Điểm trung bình: <strong>${formatNumber(avgScore)}/10</strong><br>
+                                                • Thời gian học: <strong>${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m</strong><br>
+                                                • Tham gia: <strong>${Math.round(attendance)}%</strong><br>
+                                                • Nộp muộn: <strong>${lateSubmissions} lần</strong><br>
+                                                • Đánh giá: Cần cải thiện
+                                            </div>
+                                            <div style="background: #e7f3ff; padding: 10px; border-radius: 8px;">
+                                                <strong>💡 Đề xuất:</strong> Tăng thời gian thực hành và trao đổi với giảng viên.
+                                            </div>
+                                        `;
+                                    } else if (level === 'Yeu') {
+                                        
+                                        return issuesHtml + `
+                                            <div style="background: #f8d7da; padding: 12px; border-radius: 8px; border-left: 4px solid #dc3545; margin-bottom: 10px;">
+                                                <strong>⚠️ Yếu</strong><br><br>
+                                                • Điểm trung bình: <strong>${formatNumber(avgScore)}/10</strong><br>
+                                                • Thời gian học: <strong>${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m</strong><br>
+                                                • Tham gia: <strong>${Math.round(attendance)}%</strong><br>
+                                                • Nộp muộn: <strong>${lateSubmissions} lần</strong><br>
+                                                • Đánh giá: Cần cải thiện khẩn cấp
+                                            </div>
+                                            <div style="background: #e7f3ff; padding: 10px; border-radius: 8px;">
+                                                <strong>💡 Đề xuất:</strong><br>
+                                                • Gặp giảng viên để được hướng dẫn<br>
+                                                • Tham gia nhóm học tập<br>
+                                                • Lập kế hoạch học tập rõ ràng
+                                            </div>
+                                        `;
+                                    } else {
+                                        return `<em style="color: #999;">Chưa có đủ dữ liệu để đánh giá chi tiết.</em>`;
+                                    }
+                                })()}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin: 30px 0 20px 0;">
+                        <h3 style="color: #667eea; margin: 0;">📚 Chi Tiết Theo Môn Học</h3>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="font-weight: bold; color: #333;">Lọc môn:</label>
+                            <select id="modalCourseFilter_${studentId}" onchange="filterModalCourses(${studentId})" 
+                                style="padding: 8px 15px; border: 2px solid #667eea; border-radius: 8px; font-size: 14px; cursor: pointer; background: white;">
+                                <option value="all">📚 Tất cả môn</option>
+                                ${Object.keys(COURSES).map(name => `<option value="${name}">${COURSES[name].icon} ${name}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    <div id="courseDetailsContainer_${studentId}">
+                `;
+
+                Object.keys(COURSES).forEach((courseName, index) => {
+                    if (student.courses && student.courses[courseName]) {
+                        const courseData = student.courses[courseName];
+                        const skillInfo = skillEval[courseName];
+                        const courseDef = COURSES[courseName];
+                        const chartId = `courseChart_${index}`;
+
+                        modalHtml += `
+                            <div class="course-detail-item" data-course="${courseName}" style="background: white; padding: 25px; border-radius: 15px; margin-bottom: 25px; border-left: 5px solid #667eea;">
+                                <h4 style="color: #667eea; font-size: 1.4em; margin-bottom: 15px;">
+                                    ${courseDef.icon} ${courseName}
+                                </h4>
+                                
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                                    <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; cursor: pointer; transition: all 0.3s;" 
+                                         onclick="toggleExerciseDetails('${courseName.replace(/'/g, "\\'")}', ${studentId})"
+                                         onmouseover="this.style.background='#e3f2fd'; this.style.transform='translateY(-2px)'"
+                                         onmouseout="this.style.background='#f8f9fa'; this.style.transform='translateY(0)'">
+                                        <strong style="color: #667eea;">📊 Điểm TB</strong><br>
+                                        <span style="font-size: 1.5em; font-weight: bold; color: #667eea;">
+                                            ${formatScore(courseData.score)}/10
+                                        </span>
+                                        <div style="font-size: 12px; color: #999; margin-top: 5px;">Click xem bài tập</div>
+                                    </div>
+                                    <div style="background: #fff3e0; padding: 15px; border-radius: 10px;">
+                                        <strong style="color: #ff9800;">📝 Giữa kỳ</strong><br>
+                                        <span style="font-size: 1.3em; font-weight: bold; color: ${(courseData.midterm_score || 0) >= 5 ? '#28a745' : '#dc3545'};">
+                                            ${formatScore(courseData.midterm_score || 0)}/10
+                                        </span>
+                                    </div>
+                                    <div style="background: #e8f5e9; padding: 15px; border-radius: 10px;">
+                                        <strong style="color: #4caf50;">🎓 Cuối kỳ</strong><br>
+                                        <span style="font-size: 1.3em; font-weight: bold; color: ${(courseData.final_score || 0) >= 5 ? '#28a745' : '#dc3545'};">
+                                            ${formatScore(courseData.final_score || 0)}/10
+                                        </span>
+                                    </div>
+                                    <div style="background: #e3f2fd; padding: 15px; border-radius: 10px;">
+                                        <strong style="color: #2196f3;">📚 Bài tập</strong><br>
+                                        <span style="font-size: 1.3em; font-weight: bold; color: ${(courseData.homework_score || 0) >= 5 ? '#28a745' : '#dc3545'};">
+                                            ${formatScore(courseData.homework_score || 0)}/10
+                                        </span>
+                                    </div>
+                                    <div style="background: #f3e5f5; padding: 15px; border-radius: 10px; cursor: pointer; transition: all 0.3s;" 
+                                         onclick="toggleTimeDetails('${courseName.replace(/'/g, "\\'")}', ${studentId})"
+                                         onmouseover="this.style.background='#e1bee7'; this.style.transform='translateY(-2px)'"
+                                         onmouseout="this.style.background='#f3e5f5'; this.style.transform='translateY(0)'">
+                                        <strong style="color: #9c27b0;">⏱️ Thời gian</strong><br>
+                                        <span style="font-size: 1.3em; font-weight: bold; color: #9c27b0;">
+                                            ${Math.floor(courseData.time_minutes / 60)}h ${Math.round(courseData.time_minutes % 60)}m
+                                        </span>
+                                        <div style="font-size: 11px; color: #999; margin-top: 3px;">Click xem chi tiết</div>
+                                    </div>
+                                </div>
+                                
+                                <div style="margin-top: 20px; background: #f8f9fa; padding: 20px; border-radius: 10px;">
+                                    <h5 style="color: #667eea; margin-bottom: 15px;">📈 Biểu đồ điểm số chi tiết</h5>
+                                    <div style="position: relative; height: 300px; width: 100%;">
+                                        <canvas id="${chartId}"></canvas>
+                                    </div>
+                                </div>
+
+                                ${skillInfo ? `
+                                    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-top: 20px;">
+                                        <h5 style="color: #667eea; margin-bottom: 15px;">
+                                            🔍 Chi Tiết Kỹ Năng (${skillInfo.skills_summary?.passed_skills || 0}/${skillInfo.skills_summary?.total_skills || 4} đạt)
+                                        </h5>
+                                        ${Object.entries(skillInfo.skills || {}).map(([skillName, skillData]) => `
+                                            <div class="skill-item ${skillData.passed ? 'passed' : 'failed'}" style="margin: 10px 0;">
+                                                <span class="skill-name">${skillName}</span>
+                                                <span class="skill-score">${skillData.score}/10</span>
+                                                <span style="font-weight: 600; color: ${skillData.passed ? '#4CAF50' : '#f44336'};">
+                                                    (${skillData.level})
+                                                </span>
+                                                <span class="skill-status">${skillData.passed ? '✓ Đạt' : '✗ Chưa đạt'}</span>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
+                                
+                                <!-- Container cho chi tiết bài tập -->
+                                <div id="exerciseDetails_${courseName.replace(/\s+/g, '_')}" style="display: none; margin-top: 20px;"></div>
+                                
+                                <!-- Container cho chi tiết thời gian -->
+                                <div id="timeDetails_${courseName.replace(/\s+/g, '_')}" style="display: none; margin-top: 20px;"></div>
+                            </div>
+                        `;
+                    }
+                });
+                
+                // Đóng container chi tiết môn học
+                modalHtml += `</div>`;
+                
+                // Lưu dữ liệu integrated để sử dụng cho toggle chi tiết bài tập
+                if (data.integrated_data) {
+                    currentIntegratedData = data.integrated_data;
+                }
+                
+                document.getElementById('modalContent').innerHTML = modalHtml;
+                document.getElementById('studentModal').style.display = 'block';
+
+                // Khởi tạo biểu đồ cho từng môn học
+                Object.keys(COURSES).forEach((courseName, index) => {
+                    if (student.courses && student.courses[courseName]) {
+                        const chartId = `courseChart_${index}`;
+                        const ctx = document.getElementById(chartId);
+                        if (ctx) {
+                            const courseData = student.courses[courseName];
+                            const skillInfo = skillEval[courseName];
+                            
+                            // Chuẩn bị dữ liệu cho biểu đồ
+                            const skillScores = [];
+                            const skillLabels = [];
+                            const backgroundColors = [];
+                            
+                            if (skillInfo && skillInfo.skills) {
+                                Object.entries(skillInfo.skills).forEach(([skillName, skillData]) => {
+                                    // Bỏ các từ không cần thiết và dấu ngoặc
+                                    let simplifiedName = skillName
+                                        .replace(/\([^)]*\)/g, '')  // xóa nội dung trong ngoặc
+                                        .replace('Kỹ năng ', '')    // xóa "Kỹ năng "
+                                        .replace('Kiến thức ', '')  // xóa "Kiến thức "
+                                        .trim();                    // xóa khoảng trắng thừa
+                                    skillLabels.push(simplifiedName);
+                                    skillScores.push(skillData.score);
+                                    // Màu xanh cho kỹ năng đạt, đỏ cho kỹ năng chưa đạt
+                                    backgroundColors.push(skillData.passed ? 'rgba(76, 175, 80, 0.6)' : 'rgba(244, 67, 54, 0.6)');
+                                });
+                            }
+                            
+                            // Thêm điểm tổng vào cuối
+                            skillLabels.push('Tổng');
+                            skillScores.push(courseData.score);
+                            backgroundColors.push('rgba(103, 126, 234, 0.6)');
+                            
+                            new Chart(ctx, {
+                                type: 'bar',
+                                data: {
+                                    labels: skillLabels,
+                                    datasets: [{
+                                        label: 'Điểm số',
+                                        data: skillScores,
+                                        backgroundColor: backgroundColors,
+                                        borderColor: backgroundColors.map(color => color.replace('0.6', '1')),
+                                        borderWidth: 1
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    layout: {
+                                        padding: {
+                                            left: 10,
+                                            right: 20,
+                                            top: 10,
+                                            bottom: 10
+                                        }
+                                    },
+                                    scales: {
+                                        y: {
+                                            beginAtZero: true,
+                                            max: 10,
+                                            grid: {
+                                                color: 'rgba(0, 0, 0, 0.1)'
+                                            },
+                                            ticks: {
+                                                stepSize: 2
+                                            }
+                                        },
+                                        x: {
+                                            grid: {
+                                                display: false
+                                            },
+                                            ticks: {
+                                                maxRotation: 0,
+                                                autoSkip: false,
+                                                font: {
+                                                    size: 11
+                                                }
+                                            }
+                                        }
+                                    },
+                                    plugins: {
+                                        legend: {
+                                            display: false
+                                        },
+                                        tooltip: {
+                                            callbacks: {
+                                                label: function(context) {
+                                                    return `Điểm: ${context.raw.toFixed(1)}/10`;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                });
+            } catch (error) {
+                alert('Lỗi khi tải chi tiết: ' + error.message);
+            }
+        }
+
+        // Lưu trữ dữ liệu integrated để sử dụng cho toggle
+        let currentIntegratedData = null;
+        
+        async function toggleExerciseDetails(courseName, studentId) {
+            const containerId = `exerciseDetails_${courseName.replace(/\s+/g, '_')}`;
+            const container = document.getElementById(containerId);
+            
+            if (!container) return;
+            
+            // Đóng tất cả các chi tiết bài tập và thời gian khác
+            Object.keys(COURSES).forEach(course => {
+                const otherExerciseId = `exerciseDetails_${course.replace(/\s+/g, '_')}`;
+                const otherTimeId = `timeDetails_${course.replace(/\s+/g, '_')}`;
+                const otherExercise = document.getElementById(otherExerciseId);
+                const otherTime = document.getElementById(otherTimeId);
+                if (otherExercise && otherExerciseId !== containerId) {
+                    otherExercise.style.display = 'none';
+                }
+                if (otherTime) {
+                    otherTime.style.display = 'none';
+                }
+            });
+            
+            // Toggle hiển thị môn hiện tại
+            if (container.style.display === 'none' || container.style.display === '') {
+                // Nếu chưa có dữ liệu, load từ API
+                if (!currentIntegratedData) {
+                    try {
+                        const response = await fetch(`${API_BASE}/api/student/${studentId}`);
+                        const data = await response.json();
+                        currentIntegratedData = data.integrated_data;
+                    } catch (error) {
+                        alert('Lỗi khi tải dữ liệu bài tập: ' + error.message);
+                        return;
+                    }
+                }
+                
+                // Hiển thị chi tiết bài tập
+                if (currentIntegratedData && currentIntegratedData.exercise_data && currentIntegratedData.exercise_data.detailed_exercises) {
+                    const detailedExercises = currentIntegratedData.exercise_data.detailed_exercises;
+                    
+                    // Tìm tên môn học đúng (có thể khác giữa API danh sách và chi tiết)
+                    let actualCourseName = courseName;
+                    if (!detailedExercises[courseName]) {
+                        // Thử tìm với tên rút gọn
+                        const possibleNames = Object.keys(detailedExercises);
+                        actualCourseName = possibleNames.find(name => 
+                            name.includes(courseName.split(' ')[0]) || courseName.includes(name.split(' ')[0])
+                        ) || courseName;
+                    }
+                    
+                    const courseExercises = detailedExercises[actualCourseName];
+                    
+                    if (courseExercises) {
+                        let html = `
+                            <div style="background: white; padding: 20px; border-radius: 12px; border: 2px solid #667eea; animation: slideDown 0.3s ease;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                                    <h4 style="color: #667eea; margin: 0;">📝 Chi Tiết Bài Tập - ${courseName}</h4>
+                                    <button onclick="toggleExerciseDetails('${courseName.replace(/'/g, "\\'")}', ${studentId})" 
+                                            style="background: #f44336; color: white; border: none; padding: 5px 15px; border-radius: 5px; cursor: pointer;">
+                                        ✕ Đóng
+                                    </button>
+                                </div>
+                        `;
+                        
+                        // Tính điểm trung bình môn học từ các kỹ năng
+                        const skillScores = Object.values(courseExercises).map(skill => skill.avg_score);
+                        const courseAvg = (skillScores.reduce((a, b) => a + b, 0) / skillScores.length);
+                        
+                        html += `
+                            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
+                                <h5 style="margin: 0 0 10px 0;">📊 Điểm Trung Bình Môn Học</h5>
+                                <div style="font-size: 36px; font-weight: bold;">${courseAvg}/10</div>
+                                <div style="font-size: 14px; opacity: 0.9; margin-top: 5px;">
+                                    Tính từ ${Object.keys(courseExercises).length} kỹ năng
+                                </div>
+                            </div>
+                        `;
+                        
+                        Object.entries(courseExercises).forEach(([skill, skillData]) => {
+                            const avgScore = skillData.avg_score;
+                            let scoreColor = '#4CAF50';
+                            if (avgScore < 5.0) scoreColor = '#f44336';
+                            else if (avgScore < 7.0) scoreColor = '#FF9800';
+                            else if (avgScore < 8.0) scoreColor = '#2196F3';
+                            
+                            html += `
+                                <div style="background: #f9f9f9; padding: 15px; border-radius: 10px; margin-bottom: 15px; border-left: 4px solid ${scoreColor};">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                        <h5 style="color: #333; margin: 0;">✏️ ${skill}</h5>
+                                        <span style="background: ${scoreColor}; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold;">
+                                            ${avgScore}/10
+                                        </span>
+                                    </div>
+                                    <p style="color: #666; font-size: 14px; margin-bottom: 12px;">Tổng số bài: ${skillData.total_exercises}</p>
+                                    
+                                    <div style="overflow-x: auto;">
+                                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                                            <thead>
+                                                <tr style="background: #f5f5f5;">
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Bài</th>
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Điểm</th>
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Thời gian</th>
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Trạng thái</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                            `;
+                            
+                            skillData.exercises.forEach(ex => {
+                                const score = ex.score;
+                                let scoreStyle = 'color: #4CAF50;';
+                                if (score < 5.0) scoreStyle = 'color: #f44336; font-weight: bold;';
+                                else if (score < 7.0) scoreStyle = 'color: #FF9800;';
+                                else if (score < 8.0) scoreStyle = 'color: #2196F3;';
+                                
+                                const statusIcon = ex.is_anomaly ? '⚠️' : '✓';
+                                const statusColor = ex.is_anomaly ? '#f44336' : '#4CAF50';
+                                const statusText = ex.is_anomaly ? (ex.anomaly_reasons || 'Bất thường') : 'Bình thường';
+                                
+                                html += `
+                                    <tr style="border-bottom: 1px solid #eee;">
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd;">${ex.exercise_number}</td>
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd; ${scoreStyle}">${score.toFixed(1)}</td>
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd;">${ex.completion_time.toFixed(1)} phút</td>
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd; color: ${statusColor};" title="${statusText}">
+                                            ${statusIcon}
+                                        </td>
+                                    </tr>
+                                `;
+                            });
+                            
+                            const avgTime = skillData.exercises.reduce((sum, ex) => sum + ex.completion_time, 0) / skillData.exercises.length;
+                            const passedCount = skillData.exercises.filter(ex => ex.score >= 5.0).length;
+                            const passRate = (passedCount / skillData.exercises.length * 100).toFixed(0);
+                            
+                            html += `
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    <div style="margin-top: 12px; padding: 10px; background: #fff; border-radius: 5px; font-size: 12px; color: #666; border: 1px solid #e0e0e0;">
+                                        <strong>Thống kê:</strong> 
+                                        Điểm TB: ${avgScore} | 
+                                        Thời gian TB: ${avgTime.toFixed(1)} phút | 
+                                        Tỷ lệ đạt: ${passRate}% (${passedCount}/${skillData.exercises.length})
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        html += `</div>`;
+                        container.innerHTML = html;
+                        container.style.display = 'block';
+                        
+                        // Scroll đến vị trí chi tiết
+                        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                }
+            } else {
+                // Ẩn đi
+                container.style.display = 'none';
+            }
+        }
+        
+        async function toggleTimeDetails(courseName, studentId) {
+            const containerId = `timeDetails_${courseName.replace(/\s+/g, '_')}`;
+            const container = document.getElementById(containerId);
+            
+            if (!container) return;
+            
+            // Đóng tất cả các chi tiết bài tập và thời gian khác
+            Object.keys(COURSES).forEach(course => {
+                const otherExerciseId = `exerciseDetails_${course.replace(/\s+/g, '_')}`;
+                const otherTimeId = `timeDetails_${course.replace(/\s+/g, '_')}`;
+                const otherExercise = document.getElementById(otherExerciseId);
+                const otherTime = document.getElementById(otherTimeId);
+                if (otherExercise) {
+                    otherExercise.style.display = 'none';
+                }
+                if (otherTime && otherTimeId !== containerId) {
+                    otherTime.style.display = 'none';
+                }
+            });
+            
+            // Toggle hiển thị môn hiện tại
+            if (container.style.display === 'none' || container.style.display === '') {
+                // Nếu chưa có dữ liệu, load từ API
+                if (!currentIntegratedData) {
+                    try {
+                        const response = await fetch(`${API_BASE}/api/student/${studentId}`);
+                        const data = await response.json();
+                        currentIntegratedData = data.integrated_data;
+                    } catch (error) {
+                        alert('Lỗi khi tải dữ liệu thời gian: ' + error.message);
+                        return;
+                    }
+                }
+                
+                // Hiển thị chi tiết thời gian
+                if (currentIntegratedData && currentIntegratedData.exercise_data && currentIntegratedData.exercise_data.detailed_exercises) {
+                    const detailedExercises = currentIntegratedData.exercise_data.detailed_exercises;
+                    
+                    // Tìm tên môn học đúng (có thể khác giữa API danh sách và chi tiết)
+                    let actualCourseName = courseName;
+                    if (!detailedExercises[courseName]) {
+                        // Thử tìm với tên rút gọn
+                        const possibleNames = Object.keys(detailedExercises);
+                        actualCourseName = possibleNames.find(name => 
+                            name.includes(courseName.split(' ')[0]) || courseName.includes(name.split(' ')[0])
+                        ) || courseName;
+                    }
+                    
+                    const courseExercises = detailedExercises[actualCourseName];
+                    
+                    if (courseExercises) {
+                        let html = `
+                            <div style="background: white; padding: 20px; border-radius: 12px; border: 2px solid #FF9800; animation: slideDown 0.3s ease;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                                    <h4 style="color: #FF9800; margin: 0;">⏱️ Chi Tiết Thời Gian - ${courseName}</h4>
+                                    <button onclick="toggleTimeDetails('${courseName.replace(/'/g, "\\'")}', ${studentId})" 
+                                            style="background: #f44336; color: white; border: none; padding: 5px 15px; border-radius: 5px; cursor: pointer;">
+                                        ✕ Đóng
+                                    </button>
+                                </div>
+                        `;
+                        
+                        // Tính tổng thời gian môn học
+                        let totalTime = 0;
+                        let totalExercises = 0;
+                        Object.values(courseExercises).forEach(skill => {
+                            skill.exercises.forEach(ex => {
+                                totalTime += ex.completion_time;
+                                totalExercises++;
+                            });
+                        });
+                        
+                        const avgTime = totalTime / totalExercises;
+                        const totalHours = Math.floor(totalTime / 60);
+                        const totalMinutes = Math.round(totalTime % 60);
+                        
+                        html += `
+                            <div style="background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); color: white; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
+                                <h5 style="margin: 0 0 10px 0;">⏱️ Tổng Thời Gian Môn Học</h5>
+                                <div style="font-size: 36px; font-weight: bold;">${totalHours}h ${totalMinutes}m</div>
+                                <div style="font-size: 14px; opacity: 0.9; margin-top: 5px;">
+                                    Trung bình: ${avgTime.toFixed(1)} phút/bài | Tổng ${totalExercises} bài tập
+                                </div>
+                            </div>
+                        `;
+                        
+                        Object.entries(courseExercises).forEach(([skill, skillData]) => {
+                            const skillTotalTime = skillData.exercises.reduce((sum, ex) => sum + ex.completion_time, 0);
+                            const skillAvgTime = skillTotalTime / skillData.exercises.length;
+                            const skillHours = Math.floor(skillTotalTime / 60);
+                            const skillMinutes = Math.round(skillTotalTime % 60);
+                            
+                            // Xác định màu dựa trên thời gian trung bình
+                            let timeColor = '#4CAF50'; // Xanh lá - thời gian hợp lý
+                            if (skillAvgTime < 5) timeColor = '#f44336'; // Đỏ - quá nhanh
+                            else if (skillAvgTime < 15) timeColor = '#FF9800'; // Cam - hơi nhanh
+                            else if (skillAvgTime > 120) timeColor = '#9C27B0'; // Tím - quá lâu
+                            else if (skillAvgTime > 60) timeColor = '#2196F3'; // Xanh dương - hơi lâu
+                            
+                            html += `
+                                <div style="background: #f9f9f9; padding: 15px; border-radius: 10px; margin-bottom: 15px; border-left: 4px solid ${timeColor};">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                        <h5 style="color: #333; margin: 0;">⏱️ ${skill}</h5>
+                                        <span style="background: ${timeColor}; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold;">
+                                            ${skillHours}h ${skillMinutes}m
+                                        </span>
+                                    </div>
+                                    <p style="color: #666; font-size: 14px; margin-bottom: 12px;">
+                                        Trung bình: ${skillAvgTime.toFixed(1)} phút/bài | Tổng: ${skillData.total_exercises} bài
+                                    </p>
+                                    
+                                    <div style="overflow-x: auto;">
+                                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                                            <thead>
+                                                <tr style="background: #f5f5f5;">
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Bài</th>
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Thời gian</th>
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Điểm</th>
+                                                    <th style="padding: 8px; text-align: center; border: 1px solid #ddd;">Đánh giá</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                            `;
+                            
+                            skillData.exercises.forEach(ex => {
+                                const time = ex.completion_time;
+                                let timeStyle = 'color: #4CAF50;';
+                                let timeEval = 'Hợp lý';
+                                
+                                if (time < 5) {
+                                    timeStyle = 'color: #f44336; font-weight: bold;';
+                                    timeEval = 'Quá nhanh ⚠️';
+                                } else if (time < 15) {
+                                    timeStyle = 'color: #FF9800;';
+                                    timeEval = 'Hơi nhanh';
+                                } else if (time > 120) {
+                                    timeStyle = 'color: #9C27B0; font-weight: bold;';
+                                    timeEval = 'Quá lâu ⚠️';
+                                } else if (time > 60) {
+                                    timeStyle = 'color: #2196F3;';
+                                    timeEval = 'Hơi lâu';
+                                }
+                                
+                                const hours = Math.floor(time / 60);
+                                const minutes = Math.round(time % 60);
+                                const timeDisplay = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+                                
+                                html += `
+                                    <tr style="border-bottom: 1px solid #eee;">
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd;">${ex.exercise_number}</td>
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd; ${timeStyle}">${timeDisplay}</td>
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd;">${ex.score.toFixed(1)}</td>
+                                        <td style="padding: 8px; text-align: center; border: 1px solid #ddd; font-size: 11px;">${timeEval}</td>
+                                    </tr>
+                                `;
+                            });
+                            
+                            // Phân tích thời gian
+                            const fastCount = skillData.exercises.filter(ex => ex.completion_time < 15).length;
+                            const slowCount = skillData.exercises.filter(ex => ex.completion_time > 60).length;
+                            const normalCount = skillData.exercises.length - fastCount - slowCount;
+                            
+                            html += `
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    <div style="margin-top: 12px; padding: 10px; background: #fff; border-radius: 5px; font-size: 12px; color: #666; border: 1px solid #e0e0e0;">
+                                        <strong>Phân tích:</strong> 
+                                        Nhanh (<15m): ${fastCount} bài | 
+                                        Bình thường: ${normalCount} bài | 
+                                        Chậm (>60m): ${slowCount} bài
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        html += `</div>`;
+                        container.innerHTML = html;
+                        container.style.display = 'block';
+                        
+                        // Scroll đến vị trí chi tiết
+                        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                }
+            } else {
+                // Ẩn đi
+                container.style.display = 'none';
+            }
+        }
+        
+        function closeModal() {
+            document.getElementById('studentModal').style.display = 'none';
+            currentIntegratedData = null; // Reset dữ liệu khi đóng modal
+        }
+        
+        // Hàm lọc môn học trong modal chi tiết
+        function filterModalCourses(studentId) {
+            const filterSelect = document.getElementById(`modalCourseFilter_${studentId}`);
+            const selectedCourse = filterSelect ? filterSelect.value : 'all';
+            
+            // Lấy tất cả các div môn học trong modal
+            const courseItems = document.querySelectorAll('.course-detail-item');
+            
+            courseItems.forEach(item => {
+                const courseName = item.getAttribute('data-course');
+                if (selectedCourse === 'all' || courseName === selectedCourse) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+            
+            // Cập nhật bảng phân tích nếu có
+            if (typeof updateScoreTable === 'function') {
+                // Đồng bộ với bộ lọc trong bảng phân tích
+                const scoreTableFilter = document.getElementById(`courseFilter_${studentId}`);
+                if (scoreTableFilter) {
+                    scoreTableFilter.value = selectedCourse;
+                    updateScoreTable(studentId);
+                }
+            }
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('studentModal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        // Tự động load khi trang được mở
+        window.onload = () => {
+            loadStudents();
+        };
+    </script>
+</body>
+</html>
+
+
+
+
+
+
