@@ -37,6 +37,14 @@ class StudentDataGenerator:
             from supabase import create_client
             supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
             
+            # Mapping course_code -> tên đầy đủ
+            COURSE_CODE_TO_NAME = {
+                'NMLT': 'Nhập Môn Lập Trình',
+                'KTLT': 'Kĩ Thuật Lập Trình',
+                'CTDL': 'Cấu trúc Dữ Liệu và Giải Thuật',
+                'OOP': 'Lập Trình Hướng Đối Tượng'
+            }
+            
             # Load students
             students_result = supabase.table('students').select('*').execute()
             students = {s['student_id']: s for s in students_result.data}
@@ -55,7 +63,12 @@ class StudentDataGenerator:
                 if sid in students:
                     if 'courses' not in students[sid]:
                         students[sid]['courses'] = {}
-                    students[sid]['courses'][score['course_code']] = {
+                    
+                    # Map course_code sang tên đầy đủ
+                    course_code = score['course_code']
+                    course_name = COURSE_CODE_TO_NAME.get(course_code, course_code)
+                    
+                    students[sid]['courses'][course_name] = {
                         'score': float(score.get('score', 0) or 0),
                         'midterm_score': float(score.get('midterm_score', 0) or 0),
                         'final_score': float(score.get('final_score', 0) or 0),
