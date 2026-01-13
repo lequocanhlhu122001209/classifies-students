@@ -2196,8 +2196,11 @@
                     // Dùng tổng thời gian để đồng nhất với modal chi tiết
                     const timeInHours = totalTime / 60;
 
+                    // Kiểm tra sinh viên thiếu dữ liệu
+                    const isInsufficientData = s.insufficient_data || lvl === 'Chua du du lieu';
+                    
                     // Xác định màu nền dựa trên level
-                    const levelColorClass = {
+                    const levelColorClass = isInsufficientData ? 'background:rgba(244,67,54,0.15)' : {
                         'Xuat sac': 'background:rgba(76,175,80,0.1)',
                         'Kha': 'background:rgba(33,150,243,0.1)',
                         'Trung binh': 'background:rgba(255,152,0,0.1)',
@@ -2210,7 +2213,7 @@
                             <td style="padding:12px">
                                 <div style="font-weight:500">${(s.name||'').replace(/</g,'&lt;')}</div>
                                 <div style="font-size:12px;color:#666;margin-top:4px">
-                                    Điểm TB: ${parseFloat(avgScore).toFixed(1)}/10 | Thời gian học: ${Math.floor(timeInHours)}h ${Math.round(totalTime%60)}m
+                                    Điểm TB: ${isInsufficientData || avgScore === "N/A" ? '<span style="color:#dc3545;font-weight:bold">N/A</span>' : parseFloat(avgScore).toFixed(1) + '/10'} | Thời gian học: ${isInsufficientData || totalTime === 0 ? '<span style="color:#dc3545;font-weight:bold">N/A</span>' : Math.floor(timeInHours) + 'h ' + Math.round(totalTime%60) + 'm'}
                                 </div>
                             </td>
                             <td style="padding:12px">
@@ -2218,9 +2221,9 @@
                                 <div style="font-size:12px;color:#666;margin-top:4px">${khoa}</div>
                             </td>
                             <td style="padding:12px">
-                                <span class="level ${lvl.toLowerCase().replace(/\s+/g,'-')}" 
-                                      style="display:inline-block;padding:6px 12px;border-radius:20px;font-size:13px">
-                                    ${lvl}
+                                <span class="${isInsufficientData ? 'level-insufficient' : 'level ' + lvl.toLowerCase().replace(/\s+/g,'-')}" 
+                                      style="display:inline-block;padding:6px 12px;border-radius:20px;font-size:13px;${isInsufficientData ? 'background:#dc3545;color:white;' : ''}">
+                                    ${isInsufficientData ? '⚠️ Thiếu dữ liệu' : lvl}
                                 </span>
                             </td>
                             <td style="padding:12px">
