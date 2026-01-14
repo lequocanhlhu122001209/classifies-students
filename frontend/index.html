@@ -1084,6 +1084,54 @@
 
         <!-- Danh sách sinh viên tổng hợp -->
         <div id="studentsList" class="students-list" style="margin:20px 0;"></div>
+
+        <!-- BÁO CÁO GIÁO VIÊN -->
+        <div class="teacher-report" style="margin-top: 30px;">
+            <div style="background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); margin-bottom: 20px;">
+                <h2 style="color: #667eea; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+                    👨‍🏫 Báo Cáo Dành Cho Giáo Viên
+                </h2>
+                
+                <!-- Tabs -->
+                <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
+                    <button onclick="showTeacherTab('topStudents')" id="tabTopStudents" class="tab-btn active" style="padding: 10px 20px; border-radius: 10px; border: 2px solid #667eea; background: #667eea; color: white; cursor: pointer;">
+                        🏆 Top Sinh Viên
+                    </button>
+                    <button onclick="showTeacherTab('courseStats')" id="tabCourseStats" class="tab-btn" style="padding: 10px 20px; border-radius: 10px; border: 2px solid #667eea; background: white; color: #667eea; cursor: pointer;">
+                        📊 Thống Kê Môn Học
+                    </button>
+                    <button onclick="showTeacherTab('classCompare')" id="tabClassCompare" class="tab-btn" style="padding: 10px 20px; border-radius: 10px; border: 2px solid #667eea; background: white; color: #667eea; cursor: pointer;">
+                        🏫 So Sánh Lớp
+                    </button>
+                </div>
+                
+                <!-- Tab Content: Top Students -->
+                <div id="contentTopStudents" class="tab-content">
+                    <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; align-items: center;">
+                        <label>Số lượng:</label>
+                        <select id="topLimit" onchange="loadTopStudents()" style="padding: 8px 15px; border-radius: 8px; border: 2px solid #ddd;">
+                            <option value="10">Top 10</option>
+                            <option value="20">Top 20</option>
+                            <option value="50">Top 50</option>
+                        </select>
+                        <button onclick="loadTopStudents()" style="padding: 8px 20px; border-radius: 8px; background: #667eea; color: white; border: none; cursor: pointer;">
+                            🔄 Tải lại
+                        </button>
+                    </div>
+                    <div id="topStudentsTable"></div>
+                </div>
+                
+                <!-- Tab Content: Course Statistics -->
+                <div id="contentCourseStats" class="tab-content" style="display: none;">
+                    <div id="courseStatsContent"></div>
+                </div>
+                
+                <!-- Tab Content: Class Comparison -->
+                <div id="contentClassCompare" class="tab-content" style="display: none;">
+                    <div id="classCompareContent"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Modal chi tiết sinh viên -->

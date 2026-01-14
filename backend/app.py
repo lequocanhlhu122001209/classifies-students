@@ -21,6 +21,7 @@ from course_definitions import COURSES, CLASSIFICATION_LEVELS
 from routes.students import students_bp, init_data_store as init_students
 from routes.statistics import stats_bp, init_data_store as init_stats
 from routes.classify import classify_bp, init_data_store as init_classify
+from routes.ranking import ranking_bp, init_data_store as init_ranking
 
 load_dotenv()
 
@@ -40,6 +41,7 @@ data_store = {
 app.register_blueprint(students_bp, url_prefix='/api')
 app.register_blueprint(stats_bp, url_prefix='/api')
 app.register_blueprint(classify_bp, url_prefix='/api')
+app.register_blueprint(ranking_bp, url_prefix='/api')
 
 
 # ============== ROUTES ==============
@@ -124,17 +126,22 @@ def init_data():
     init_students(data_store)
     init_stats(data_store)
     init_classify(data_store)
+    init_ranking(data_store)
     
     print(f"✅ Đã phân loại {len(classified_students)} sinh viên")
     print("=" * 60)
     print("🌐 API Endpoints:")
-    print("  GET  /                - Frontend")
-    print("  GET  /api/health      - Health check")
-    print("  GET  /api/students    - Danh sách sinh viên")
-    print("  GET  /api/student/<id>- Chi tiết sinh viên")
-    print("  GET  /api/statistics  - Thống kê")
-    print("  POST /api/classify    - Phân loại lại")
-    print("  GET  /api/courses     - Danh sách môn học")
+    print("  GET  /                    - Frontend")
+    print("  GET  /api/health          - Health check")
+    print("  GET  /api/students        - Danh sách sinh viên")
+    print("  GET  /api/student/<id>    - Chi tiết sinh viên")
+    print("  GET  /api/statistics      - Thống kê")
+    print("  POST /api/classify        - Phân loại lại")
+    print("  GET  /api/courses         - Danh sách môn học")
+    print("  GET  /api/top-students    - Top sinh viên xuất sắc")
+    print("  GET  /api/course-statistics - Thống kê theo môn")
+    print("  GET  /api/skill-ranking   - Xếp hạng theo kỹ năng")
+    print("  GET  /api/class-comparison - So sánh giữa các lớp")
     print("=" * 60)
 
 
