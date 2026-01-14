@@ -1,5 +1,5 @@
 """
-Data Generator - Load dữ liệu sinh viên từ Supabase hoặc SQL Server
+Data Generator - Load dữ liệu sinh viên từ SQL Server
 """
 
 import os
@@ -8,38 +8,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv('SUPABASE_URL', '')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY', '')
-DATABASE_TYPE = os.getenv('DATABASE_TYPE', 'supabase')  # supabase | sqlserver
-
 
 class StudentDataGenerator:
     """
-    Load và tạo dữ liệu sinh viên
-    - Load từ Supabase (cloud)
-    - Load từ SQL Server (local)
-    - Tạo dữ liệu giả lập (testing)
+    Load và tạo dữ liệu sinh viên từ SQL Server
     """
     
-    def __init__(self, seed=42, use_supabase=True, csv_path=None):
+    def __init__(self, seed=42, use_supabase=False, csv_path=None):
         self.seed = seed
-        self.use_supabase = use_supabase
         self.csv_path = csv_path
         random.seed(seed)
         
     def load_all_students(self):
-        """Load tất cả sinh viên từ database"""
-        if self.use_supabase:
-            # Kiểm tra DATABASE_TYPE để chọn nguồn dữ liệu
-            if DATABASE_TYPE == 'sqlserver':
-                return self._load_from_sqlserver()
-            return self._load_from_supabase()
-        return self.generate_realistic_students(50)
+        """Load tất cả sinh viên từ SQL Server"""
+        return self._load_from_sqlserver()
     
     def _load_from_sqlserver(self):
-        """Load dữ liệu từ SQL Server local"""
+        """Load dữ liệu từ SQL Server"""
         try:
-            from sqlserver_sync import load_students_from_sqlserver, test_connection
+            from sqlserver_sync import load_students_from_sqlserver
             
             print("Đang tải dữ liệu từ SQL Server...")
             students = load_students_from_sqlserver()
@@ -47,66 +34,14 @@ class StudentDataGenerator:
             if students:
                 print(f"✓ Đã tải {len(students)} sinh viên từ SQL Server")
             else:
-                print("⚠️ Không có dữ liệu trong SQL Server, đang load từ Supabase...")
-                students = self._load_from_supabase()
+                print("⚠️ Không có dữ liệu, tạo dữ liệu mẫu...")
+                students = self.generate_realistic_students(50)
             
             return students
             
         except Exception as e:
             print(f"⚠️ Lỗi load từ SQL Server: {e}")
-            print("   Đang fallback sang Supabase...")
-            return self._load_from_supabase()
-    
-    def _load_from_supabase(self):
-        """Load dữ liệu từ Supabase"""
-        try:
-            from supabase import create_client
-            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            
-            # Mapping course_code -> tên đầy đủ
-            COURSE_CODE_TO_NAME = {
-                'NMLT': 'Nhập Môn Lập Trình',
-                'KTLT': 'Kĩ Thuật Lập Trình',
-                'CTDL': 'Cấu trúc Dữ Liệu và Giải Thuật',
-                'OOP': 'Lập Trình Hướng Đối Tượng'
-            }
-            
-            # Load students
-            students_result = supabase.table('students').select('*').execute()
-            students = {s['student_id']: s for s in students_result.data}
-            
-            # Load csv_data (hành vi)
-            csv_result = supabase.table('student_csv_data').select('*').execute()
-            for c in csv_result.data:
-                sid = c['student_id']
-                if sid in students:
-                    students[sid]['csv_data'] = c
-            
-            # Load course_scores
-            scores_result = supabase.table('course_scores').select('*').execute()
-            for score in scores_result.data:
-                sid = score['student_id']
-                if sid in students:
-                    if 'courses' not in students[sid]:
-                        students[sid]['courses'] = {}
-                    
-                    # Map course_code sang tên đầy đủ
-                    course_code = score['course_code']
-                    course_name = COURSE_CODE_TO_NAME.get(course_code, course_code)
-                    
-                    students[sid]['courses'][course_name] = {
-                        'score': float(score.get('score', 0) or 0),
-                        'midterm_score': float(score.get('midterm_score', 0) or 0),
-                        'final_score': float(score.get('final_score', 0) or 0),
-                        'homework_score': float(score.get('homework_score', 0) or 0),
-                        'time_minutes': float(score.get('time_minutes', 0) or 0)
-                    }
-            
-            return list(students.values())
-            
-        except Exception as e:
-            print(f"⚠️ Lỗi load từ Supabase: {e}")
-            return []
+            return self.generate_realistic_students(50)
     
     def generate_realistic_students(self, n_students=50):
         """Tạo dữ liệu sinh viên giả lập để test"""
@@ -121,8 +56,6 @@ class StudentDataGenerator:
         
         for i in range(n_students):
             student_id = 125001001 + i
-            
-            # Random profile
             profile = random.choice(['excellent', 'good', 'average', 'weak'])
             
             if profile == 'excellent':
@@ -142,7 +75,6 @@ class StudentDataGenerator:
                 behavior = random.uniform(30, 60)
                 attendance = random.uniform(0.3, 0.7)
             
-            # Generate course scores
             course_data = {}
             for course in courses:
                 score = max(0, min(10, base_score + random.uniform(-1, 1)))
