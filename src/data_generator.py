@@ -1,5 +1,5 @@
 """
-Data Generator - Load dữ liệu sinh viên từ Supabase
+Data Generator - Load dữ liệu sinh viên từ Supabase hoặc SQL Server
 """
 
 import os
@@ -10,12 +10,14 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv('SUPABASE_URL', '')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY', '')
+DATABASE_TYPE = os.getenv('DATABASE_TYPE', 'supabase')  # supabase | sqlserver
 
 
 class StudentDataGenerator:
     """
     Load và tạo dữ liệu sinh viên
-    - Load từ Supabase (production)
+    - Load từ Supabase (cloud)
+    - Load từ SQL Server (local)
     - Tạo dữ liệu giả lập (testing)
     """
     
@@ -26,10 +28,34 @@ class StudentDataGenerator:
         random.seed(seed)
         
     def load_all_students(self):
-        """Load tất cả sinh viên từ Supabase"""
+        """Load tất cả sinh viên từ database"""
         if self.use_supabase:
+            # Kiểm tra DATABASE_TYPE để chọn nguồn dữ liệu
+            if DATABASE_TYPE == 'sqlserver':
+                return self._load_from_sqlserver()
             return self._load_from_supabase()
         return self.generate_realistic_students(50)
+    
+    def _load_from_sqlserver(self):
+        """Load dữ liệu từ SQL Server local"""
+        try:
+            from sqlserver_sync import load_students_from_sqlserver, test_connection
+            
+            print("Đang tải dữ liệu từ SQL Server...")
+            students = load_students_from_sqlserver()
+            
+            if students:
+                print(f"✓ Đã tải {len(students)} sinh viên từ SQL Server")
+            else:
+                print("⚠️ Không có dữ liệu trong SQL Server, đang load từ Supabase...")
+                students = self._load_from_supabase()
+            
+            return students
+            
+        except Exception as e:
+            print(f"⚠️ Lỗi load từ SQL Server: {e}")
+            print("   Đang fallback sang Supabase...")
+            return self._load_from_supabase()
     
     def _load_from_supabase(self):
         """Load dữ liệu từ Supabase"""
