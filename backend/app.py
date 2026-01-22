@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from dotenv import load_dotenv
-from sqlserver_sync import load_students_from_sqlserver, create_tables, test_connection
+from sqlserver_sync import load_students_from_sqlserver, create_tables, test_connection, sync_all_to_sqlserver
 from student_classifier import StudentClassifier
 from skill_evaluator import SkillEvaluator
 from integrated_scoring_system import IntegratedScoringSystem
@@ -70,6 +70,43 @@ def get_courses():
         'courses': COURSES,
         'levels': CLASSIFICATION_LEVELS
     })
+
+
+@app.route('/api/sync-sqlserver', methods=['POST'])
+def sync_to_sqlserver():
+    """Đồng bộ dữ liệu lên SQL Server"""
+    try:
+        students = data_store.get('students', [])
+        classifications = data_store.get('classifications', [])
+        skill_evaluations = data_store.get('skill_evaluations', {})
+        integrated_results = data_store.get('integrated_results', [])
+        
+        # Sync lên SQL Server
+        success = sync_all_to_sqlserver(students, classifications)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Đã đồng bộ thành công lên SQL Server',
+                'stats': {
+                    'students': len(students),
+                    'classifications': len(classifications),
+                    'skill_evaluations': len(skill_evaluations),
+                    'integrated_scores': len(integrated_results),
+                    'course_scores': sum(len(s.get('courses', {})) for s in students)
+                }
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Lỗi khi đồng bộ dữ liệu'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 # ============== INIT ==============
@@ -147,4 +184,4 @@ def init_data():
 
 if __name__ == '__main__':
     init_data()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)
