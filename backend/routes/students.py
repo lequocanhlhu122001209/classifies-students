@@ -78,7 +78,10 @@ def get_student_detail(student_id):
     if not student:
         return jsonify({'error': 'Student not found'}), 404
     
-    skill_eval = data_store.get('skill_evaluations', {}).get(student_id, {})
+    skill_store = data_store.get('skill_evaluations', {})
+    skill_eval = skill_store.get(student_id) or skill_store.get(str(student_id), {})
+    if not skill_eval:
+        skill_eval = student.get('skill_evaluations', {})
     
     # Tính điểm tích hợp cho sinh viên này
     integrated_system = data_store.get('integrated_system')
