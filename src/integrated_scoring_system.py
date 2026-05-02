@@ -54,13 +54,17 @@ class IntegratedScoringSystem:
                     self.course_scores_data[sid] = {}
                 self.course_scores_data[sid][score['course_code']] = score
             
-            # Load exercise_details
-            exercises_result = supabase.table('exercise_details').select('*').execute()
-            for ex in exercises_result.data:
-                sid = ex['student_id']
-                if sid not in self.exercises_data:
-                    self.exercises_data[sid] = []
-                self.exercises_data[sid].append(ex)
+            # Load exercise_details (optional table)
+            try:
+                exercises_result = supabase.table('exercise_details').select('*').execute()
+                for ex in exercises_result.data:
+                    sid = ex['student_id']
+                    if sid not in self.exercises_data:
+                        self.exercises_data[sid] = []
+                    self.exercises_data[sid].append(ex)
+            except Exception as exercise_error:
+                # Keep working with course_scores when exercise_details is not present.
+                print(f"⚠️ Không load được exercise_details, fallback sang course_scores: {exercise_error}")
             
             print(f"✓ Đã tải {len(self.students_data)} sinh viên từ Supabase")
             print(f"✓ Đã tải {len(self.exercises_data)} sinh viên có bài tập")

@@ -90,6 +90,7 @@ class StudentDataGenerator:
                 'student_id': student_id,
                 'name': f'Sinh viên {i + 1}',
                 'class': f'22CT{111 + (i % 3)}',
+                'sex': random.choice(['Nam', 'Nữ']),
                 'courses': course_data,
                 'csv_data': {
                     'total_score': round(base_score, 2),

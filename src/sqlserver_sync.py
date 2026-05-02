@@ -115,6 +115,7 @@ def create_tables():
             name NVARCHAR(100),
             class NVARCHAR(20),
             khoa NVARCHAR(100) DEFAULT N'Khoa Công Nghệ Thông Tin',
+            sex NVARCHAR(10) DEFAULT N'Không rõ',
             total_score FLOAT DEFAULT 0,
             midterm_score FLOAT DEFAULT 0,
             final_score FLOAT DEFAULT 0,
@@ -125,6 +126,21 @@ def create_tables():
             created_at DATETIME DEFAULT GETDATE(),
             updated_at DATETIME DEFAULT GETDATE()
         )
+    """)
+
+    # Bổ sung cột sex cho DB cũ (nếu bảng students đã tồn tại từ trước)
+    cursor.execute("""
+        IF COL_LENGTH('students', 'sex') IS NULL
+        BEGIN
+            ALTER TABLE students
+            ADD sex NVARCHAR(10) DEFAULT N'Không rõ'
+        END
+    """)
+
+    cursor.execute("""
+        UPDATE students
+        SET sex = N'Không rõ'
+        WHERE sex IS NULL OR LTRIM(RTRIM(sex)) = ''
     """)
     
     # Bảng course_scores - Điểm từng môn học
@@ -199,7 +215,7 @@ def load_students_from_sqlserver():
     try:
         # Load thông tin sinh viên + csv_data (JOIN 2 bảng)
         cursor.execute("""
-            SELECT s.student_id, s.name, s.class, s.khoa,
+            SELECT s.student_id, s.name, s.class, s.khoa, s.sex,
                    c.total_score, c.midterm_score, c.final_score, 
                    c.attendance_rate, c.behavior_score_100, 
                    c.late_submissions, c.assignment_completion,
@@ -209,6 +225,15 @@ def load_students_from_sqlserver():
         """)
         
         rows = cursor.fetchall()
+
+        # Hỗ trợ cả 2 schema course_scores: course_code (mới) hoặc course_name (cũ)
+        cursor.execute("""
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'course_scores'
+        """)
+        course_columns = {c[0].lower() for c in cursor.fetchall()}
+        course_col = 'course_code' if 'course_code' in course_columns else 'course_name'
         
         for row in rows:
             student = {
@@ -216,24 +241,25 @@ def load_students_from_sqlserver():
                 "name": row[1],
                 "class": row[2],
                 "Khoa": row[3],
+                "sex": row[4] or "Không rõ",
                 "csv_data": {
-                    "total_score": row[4] or 0,
-                    "midterm_score": row[5] or 0,
-                    "final_score": row[6] or 0,
-                    "attendance_rate": row[7] or 0,
-                    "behavior_score_100": row[8] or 50,
-                    "late_submissions": row[9] or 0,
-                    "assignment_completion": row[10] or 0,
-                    "study_hours_per_week": row[11] or 0,
-                    "participation_score": row[12] or 0,
+                    "total_score": row[5] or 0,
+                    "midterm_score": row[6] or 0,
+                    "final_score": row[7] or 0,
+                    "attendance_rate": row[8] or 0,
+                    "behavior_score_100": row[9] or 50,
+                    "late_submissions": row[10] or 0,
+                    "assignment_completion": row[11] or 0,
+                    "study_hours_per_week": row[12] or 0,
+                    "participation_score": row[13] or 0,
                     "class": row[2]
                 },
                 "courses": {}
             }
             
             # Load điểm các môn học
-            cursor.execute("""
-                SELECT course_code, score, midterm_score, final_score, 
+            cursor.execute(f"""
+                SELECT {course_col}, score, midterm_score, final_score,
                        homework_score, time_minutes
                 FROM course_scores
                 WHERE student_id = ?
@@ -281,6 +307,7 @@ def save_student(student):
                     name = ?,
                     class = ?,
                     khoa = ?,
+                    sex = ?,
                     total_score = ?,
                     midterm_score = ?,
                     final_score = ?,
@@ -290,15 +317,16 @@ def save_student(student):
                     assignment_completion = ?,
                     updated_at = GETDATE()
             WHEN NOT MATCHED THEN
-                INSERT (student_id, name, class, khoa, total_score, midterm_score, 
+                INSERT (student_id, name, class, khoa, sex, total_score, midterm_score, 
                         final_score, attendance_rate, behavior_score_100, 
                         late_submissions, assignment_completion)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, 
             student.get("student_id"),
             student.get("name"),
             student.get("class") or csv_data.get("class"),
             student.get("Khoa", "Khoa Công Nghệ Thông Tin"),
+            student.get("sex") or csv_data.get("sex") or "Không rõ",
             csv_data.get("total_score", 0),
             csv_data.get("midterm_score", 0),
             csv_data.get("final_score", 0),
@@ -311,6 +339,7 @@ def save_student(student):
             student.get("name"),
             student.get("class") or csv_data.get("class"),
             student.get("Khoa", "Khoa Công Nghệ Thông Tin"),
+            student.get("sex") or csv_data.get("sex") or "Không rõ",
             csv_data.get("total_score", 0),
             csv_data.get("midterm_score", 0),
             csv_data.get("final_score", 0),

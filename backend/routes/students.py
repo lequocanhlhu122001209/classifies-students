@@ -4,6 +4,12 @@ API Routes - Students
 
 from flask import Blueprint, jsonify, request
 import re
+import sys
+import os
+
+# Import lazy classifier
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+from lazy_classifier import ensure_classifications, ensure_integrated_scores
 
 students_bp = Blueprint('students', __name__)
 
@@ -16,8 +22,12 @@ def init_data_store(store):
 
 @students_bp.route('/students', methods=['GET'])
 def get_students():
-    """Lấy danh sách sinh viên"""
+    """Lấy danh sách sinh viên - LAZY LOADING"""
     class_filter = request.args.get('class')
+    
+    # Đảm bảo đã phân loại (lazy)
+    classifications = ensure_classifications(data_store)
+    integrated_results = ensure_integrated_scores(data_store)
     
     def _normalize(code):
         if not code:
@@ -25,10 +35,10 @@ def get_students():
         return re.sub(r"\s+", "", str(code)).upper()
     
     class_filter_norm = _normalize(class_filter)
-    integrated_dict = {r['student_id']: r for r in data_store.get('integrated_results', [])}
+    integrated_dict = {r['student_id']: r for r in integrated_results}
     
     enhanced_students = []
-    for student in data_store.get('classifications', []):
+    for student in classifications:
         student_id = student.get('student_id')
         
         if class_filter_norm:
@@ -59,16 +69,25 @@ def get_students():
 
 @students_bp.route('/student/<int:student_id>', methods=['GET'])
 def get_student_detail(student_id):
-    """Lấy chi tiết sinh viên"""
-    student = next((s for s in data_store.get('classifications', []) if s.get('student_id') == student_id), None)
+    """Lấy chi tiết sinh viên - LAZY LOADING"""
+    # Đảm bảo đã phân loại (lazy)
+    classifications = ensure_classifications(data_store)
+    
+    student = next((s for s in classifications if s.get('student_id') == student_id), None)
     
     if not student:
         return jsonify({'error': 'Student not found'}), 404
     
     skill_eval = data_store.get('skill_evaluations', {}).get(student_id, {})
     
+    # Tính điểm tích hợp cho sinh viên này
     integrated_system = data_store.get('integrated_system')
-    integrated_data = integrated_system.calculate_integrated_score(student_id) if integrated_system else None
+    if not integrated_system:
+        from integrated_scoring_system import IntegratedScoringSystem
+        integrated_system = IntegratedScoringSystem()
+        data_store['integrated_system'] = integrated_system
+    
+    integrated_data = integrated_system.calculate_integrated_score(student_id)
     
     return jsonify({
         'student': student,

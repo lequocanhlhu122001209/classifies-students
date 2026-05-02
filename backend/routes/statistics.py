@@ -4,6 +4,12 @@ API Routes - Statistics
 
 from flask import Blueprint, jsonify, request
 import re
+import sys
+import os
+
+# Import lazy classifier
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+from lazy_classifier import ensure_classifications, ensure_integrated_scores
 
 stats_bp = Blueprint('statistics', __name__)
 
@@ -16,8 +22,11 @@ def init_data_store(store):
 
 @stats_bp.route('/statistics', methods=['GET'])
 def get_statistics():
-    """Lấy thống kê"""
-    classifications = data_store.get('classifications', [])
+    """Lấy thống kê - LAZY LOADING"""
+    # Đảm bảo đã phân loại (lazy)
+    classifications = ensure_classifications(data_store)
+    integrated_results = ensure_integrated_scores(data_store)
+    
     if not classifications:
         return jsonify({'error': 'No data available'}), 404
     
@@ -36,7 +45,7 @@ def get_statistics():
     original_scores = []
     integrated_scores = []
     
-    integrated_dict = {r['student_id']: r for r in data_store.get('integrated_results', [])}
+    integrated_dict = {r['student_id']: r for r in integrated_results}
     
     for student in classifications:
         if class_filter_norm:

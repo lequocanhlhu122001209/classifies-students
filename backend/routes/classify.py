@@ -62,8 +62,16 @@ def classify_students():
         data_store['integrated_results'] = integrated_results
         
         # Lưu vào SQL Server
+        saved_count = 0
         for student in classified_students:
-            save_classification(student)
+            if save_classification(student):
+                saved_count += 1
+
+        if saved_count == 0 and classified_students:
+            return jsonify({
+                'success': False,
+                'error': 'Phân loại xong nhưng không lưu được kết quả vào SQL Server'
+            }), 500
         
         # Thống kê
         level_counts = {"Xuat sac": 0, "Kha": 0, "Trung binh": 0, "Yeu": 0}
@@ -79,6 +87,10 @@ def classify_students():
         return jsonify({
             'success': True,
             'normalization_method': normalization_method,
+            'sql_saved': {
+                'saved': saved_count,
+                'total': len(classified_students)
+            },
             'statistics': {
                 'total': len(classified_students),
                 'level_counts': level_counts,

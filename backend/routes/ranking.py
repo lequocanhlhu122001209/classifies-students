@@ -3,6 +3,12 @@ API Routes - Ranking & Statistics by Course
 """
 
 from flask import Blueprint, jsonify, request
+import sys
+import os
+
+# Import lazy classifier
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+from lazy_classifier import ensure_classifications, ensure_integrated_scores
 
 ranking_bp = Blueprint('ranking', __name__)
 
@@ -41,13 +47,16 @@ def get_best_skills(student_id, skill_evaluations, courses):
 
 @ranking_bp.route('/top-students', methods=['GET'])
 def get_top_students():
-    """Lấy top sinh viên xuất sắc nhất dựa trên điểm số + hành vi"""
+    """Lấy top sinh viên xuất sắc nhất dựa trên điểm số + hành vi - LAZY LOADING"""
     limit = request.args.get('limit', 10, type=int)
     course = request.args.get('course', '')  # Lọc theo môn
     class_filter = request.args.get('class', '')  # Lọc theo lớp
     
-    classifications = data_store.get('classifications', [])
-    integrated_dict = {r['student_id']: r for r in data_store.get('integrated_results', [])}
+    # Đảm bảo đã phân loại (lazy)
+    classifications = ensure_classifications(data_store)
+    integrated_results = ensure_integrated_scores(data_store)
+    
+    integrated_dict = {r['student_id']: r for r in integrated_results}
     skill_evaluations = data_store.get('skill_evaluations', {})
     
     # Tính điểm tổng hợp cho mỗi sinh viên
@@ -164,8 +173,9 @@ def get_top_students():
 
 @ranking_bp.route('/course-statistics', methods=['GET'])
 def get_course_statistics():
-    """Thống kê số lượng sinh viên theo từng môn và mức điểm"""
-    classifications = data_store.get('classifications', [])
+    """Thống kê số lượng sinh viên theo từng môn và mức điểm - LAZY LOADING"""
+    # Đảm bảo đã phân loại (lazy)
+    classifications = ensure_classifications(data_store)
     
     
     # Định nghĩa các môn học
@@ -246,13 +256,15 @@ def get_course_statistics():
 
 @ranking_bp.route('/skill-ranking', methods=['GET'])
 def get_skill_ranking():
-    """Xếp hạng sinh viên theo kỹ năng cụ thể"""
+    """Xếp hạng sinh viên theo kỹ năng cụ thể - LAZY LOADING"""
     skill_name = request.args.get('skill', '')
     course_name = request.args.get('course', '')
     limit = request.args.get('limit', 20, type=int)
     
+    # Đảm bảo đã phân loại (lazy)
+    classifications = ensure_classifications(data_store)
+    
     skill_evaluations = data_store.get('skill_evaluations', {})
-    classifications = data_store.get('classifications', [])
     
     # Tạo dict để tra cứu nhanh
     student_dict = {s['student_id']: s for s in classifications}
@@ -304,8 +316,9 @@ def get_skill_ranking():
 
 @ranking_bp.route('/class-comparison', methods=['GET'])
 def get_class_comparison():
-    """So sánh điểm trung bình giữa các lớp"""
-    classifications = data_store.get('classifications', [])
+    """So sánh điểm trung bình giữa các lớp - LAZY LOADING"""
+    # Đảm bảo đã phân loại (lazy)
+    classifications = ensure_classifications(data_store)
     
     class_stats = {}
     

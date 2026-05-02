@@ -348,6 +348,38 @@ class StudentClassifier:
                     course_finals.append(float(course_data.get("final_score", 0)))
                     course_homeworks.append(float(course_data.get("homework_score", 0)))
             
+            # KIỂM TRA: Nếu có bất kỳ điểm nào = 0 → tự động phân loại Yếu
+            has_zero_score = False
+            zero_score_reason = []
+            
+            # Kiểm tra điểm các môn
+            for idx, score in enumerate(course_scores):
+                if score == 0:
+                    has_zero_score = True
+                    course_name = list(courses.keys())[idx] if idx < len(courses) else f"Môn {idx+1}"
+                    zero_score_reason.append(f"Điểm môn {course_name} = 0")
+            
+            # Kiểm tra điểm giữa kỳ
+            for idx, score in enumerate(course_midterms):
+                if score == 0:
+                    has_zero_score = True
+                    course_name = list(courses.keys())[idx] if idx < len(courses) else f"Môn {idx+1}"
+                    zero_score_reason.append(f"Điểm giữa kỳ {course_name} = 0")
+            
+            # Kiểm tra điểm cuối kỳ
+            for idx, score in enumerate(course_finals):
+                if score == 0:
+                    has_zero_score = True
+                    course_name = list(courses.keys())[idx] if idx < len(courses) else f"Môn {idx+1}"
+                    zero_score_reason.append(f"Điểm cuối kỳ {course_name} = 0")
+            
+            # Kiểm tra điểm bài tập
+            for idx, score in enumerate(course_homeworks):
+                if score == 0:
+                    has_zero_score = True
+                    course_name = list(courses.keys())[idx] if idx < len(courses) else f"Môn {idx+1}"
+                    zero_score_reason.append(f"Điểm bài tập {course_name} = 0")
+            
             total_score = sum(course_scores) / len(course_scores) if course_scores else float(csv_data.get("total_score", 0))
             midterm_avg = sum(course_midterms) / len(course_midterms) if course_midterms else 0
             final_avg = sum(course_finals) / len(course_finals) if course_finals else 0
@@ -532,11 +564,20 @@ class StudentClassifier:
             final_level = composite_predictions[i]
             level_order = ["Xuat sac", "Kha", "Trung binh", "Yeu"]
             
-            # ĐIỀU CHỈNH XẾP LOẠI theo bất thường
+            # KIỂM TRA ƯU TIÊN: Nếu có điểm = 0 → tự động Yếu
+            if has_zero_score:
+                final_level = "Yeu"
+                anomaly_detected = True
+                anomaly_severity = max(anomaly_severity, 3)
+                for reason in zero_score_reason:
+                    if reason not in anomaly_reasons:
+                        anomaly_reasons.append(reason)
+            
+            # ĐIỀU CHỈNH XẾP LOẠI theo bất thường (chỉ áp dụng nếu chưa bị hạ do điểm 0)
             # Severity 1: hạ 1 bậc (nộp muộn 5-9 lần, vắng nhẹ)
             # Severity 2: hạ 2 bậc (nộp muộn 10-14 lần, vắng nhiều)
             # Severity 3: hạ xuống Yếu (nghi gian lận, nộp muộn >= 15)
-            if anomaly_detected and anomaly_severity >= 1:
+            elif anomaly_detected and anomaly_severity >= 1:
                 current_idx = level_order.index(final_level) if final_level in level_order else 0
                 
                 if anomaly_severity >= 3:
