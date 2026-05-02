@@ -27,7 +27,9 @@ def get_connection(database=None):
                 f"DATABASE={db};"
                 f"UID={SQL_USERNAME};"
                 f"PWD={SQL_PASSWORD};"
+                "Encrypt=no;"
                 "TrustServerCertificate=yes;"
+                "Connection Timeout=10;"
             )
         else:
             # Windows Authentication
@@ -36,7 +38,9 @@ def get_connection(database=None):
                 f"SERVER={SQL_SERVER};"
                 f"DATABASE={db};"
                 "Trusted_Connection=yes;"
+                "Encrypt=no;"
                 "TrustServerCertificate=yes;"
+                "Connection Timeout=10;"
             )
         
         conn = pyodbc.connect(conn_str)
@@ -56,7 +60,9 @@ def create_database():
                 f"DATABASE=master;"
                 f"UID={SQL_USERNAME};"
                 f"PWD={SQL_PASSWORD};"
+                "Encrypt=no;"
                 "TrustServerCertificate=yes;"
+                "Connection Timeout=10;"
             )
         else:
             conn_str = (
@@ -64,7 +70,9 @@ def create_database():
                 f"SERVER={SQL_SERVER};"
                 f"DATABASE=master;"
                 "Trusted_Connection=yes;"
+                "Encrypt=no;"
                 "TrustServerCertificate=yes;"
+                "Connection Timeout=10;"
             )
         
         conn = pyodbc.connect(conn_str, autocommit=True)
@@ -158,6 +166,59 @@ def create_tables():
             FOREIGN KEY (student_id) REFERENCES students(student_id)
         )
     """)
+
+    # Bảng student_csv_data - Dữ liệu hành vi học tập (schema hiện dùng ở backend)
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='student_csv_data' AND xtype='U')
+        CREATE TABLE student_csv_data (
+            student_id INT PRIMARY KEY,
+            total_score FLOAT DEFAULT 0,
+            midterm_score FLOAT DEFAULT 0,
+            final_score FLOAT DEFAULT 0,
+            homework_score FLOAT DEFAULT 0,
+            attendance_rate FLOAT DEFAULT 0,
+            behavior_score_100 INT DEFAULT 50,
+            late_submissions INT DEFAULT 0,
+            assignment_completion FLOAT DEFAULT 0,
+            study_hours_per_week FLOAT DEFAULT 0,
+            participation_score FLOAT DEFAULT 0,
+            lms_usage_hours FLOAT DEFAULT 0,
+            response_quality FLOAT DEFAULT 0,
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+        )
+    """)
+
+    # Bổ sung cột còn thiếu cho DB cũ
+    cursor.execute("""
+        IF COL_LENGTH('student_csv_data', 'homework_score') IS NULL
+        BEGIN
+            ALTER TABLE student_csv_data ADD homework_score FLOAT DEFAULT 0
+        END
+    """)
+    cursor.execute("""
+        IF COL_LENGTH('student_csv_data', 'study_hours_per_week') IS NULL
+        BEGIN
+            ALTER TABLE student_csv_data ADD study_hours_per_week FLOAT DEFAULT 0
+        END
+    """)
+    cursor.execute("""
+        IF COL_LENGTH('student_csv_data', 'participation_score') IS NULL
+        BEGIN
+            ALTER TABLE student_csv_data ADD participation_score FLOAT DEFAULT 0
+        END
+    """)
+    cursor.execute("""
+        IF COL_LENGTH('student_csv_data', 'lms_usage_hours') IS NULL
+        BEGIN
+            ALTER TABLE student_csv_data ADD lms_usage_hours FLOAT DEFAULT 0
+        END
+    """)
+    cursor.execute("""
+        IF COL_LENGTH('student_csv_data', 'response_quality') IS NULL
+        BEGIN
+            ALTER TABLE student_csv_data ADD response_quality FLOAT DEFAULT 0
+        END
+    """)
     
     # Bảng classifications - Kết quả phân loại
     cursor.execute("""
@@ -233,7 +294,47 @@ def load_students_from_sqlserver():
             WHERE TABLE_NAME = 'course_scores'
         """)
         course_columns = {c[0].lower() for c in cursor.fetchall()}
-        course_col = 'course_code' if 'course_code' in course_columns else 'course_name'
+        has_course_code = 'course_code' in course_columns
+        has_course_name = 'course_name' in course_columns
+
+        course_select_cols = []
+        code_idx = None
+        name_idx = None
+        score_idx = None
+        midterm_idx = None
+        final_idx = None
+        homework_idx = None
+        time_idx = None
+
+        if has_course_code:
+            code_idx = len(course_select_cols)
+            course_select_cols.append("course_code")
+        if has_course_name:
+            name_idx = len(course_select_cols)
+            course_select_cols.append("course_name")
+
+        score_idx = len(course_select_cols)
+        midterm_idx = score_idx + 1
+        final_idx = score_idx + 2
+        homework_idx = score_idx + 3
+        time_idx = score_idx + 4
+
+        course_select_cols.extend([
+            "score",
+            "midterm_score",
+            "final_score",
+            "homework_score",
+            "time_minutes",
+        ])
+
+        course_select_sql = ", ".join(course_select_cols)
+        if not course_select_sql:
+            course_select_sql = "score, midterm_score, final_score, homework_score, time_minutes"
+            score_idx = 0
+            midterm_idx = 1
+            final_idx = 2
+            homework_idx = 3
+            time_idx = 4
         
         for row in rows:
             student = {
@@ -259,22 +360,30 @@ def load_students_from_sqlserver():
             
             # Load điểm các môn học
             cursor.execute(f"""
-                SELECT {course_col}, score, midterm_score, final_score,
-                       homework_score, time_minutes
+                SELECT {course_select_sql}
                 FROM course_scores
                 WHERE student_id = ?
             """, row[0])
             
             course_rows = cursor.fetchall()
             for course in course_rows:
-                course_code = course[0]
+                raw_course_code = course[code_idx] if code_idx is not None and len(course) > code_idx else None
+                raw_course_name = course[name_idx] if name_idx is not None and len(course) > name_idx else None
+
+                course_code = raw_course_code
+                if course_code is None or str(course_code).strip().lower() in {'', 'none', 'null', 'undefined', 'na', 'nan'}:
+                    course_code = raw_course_name
+
+                if course_code is None or str(course_code).strip().lower() in {'', 'none', 'null', 'undefined', 'na', 'nan'}:
+                    continue
+
                 course_name = COURSE_CODE_TO_NAME.get(course_code, course_code)
                 student["courses"][course_name] = {
-                    "score": course[1] or 0,
-                    "midterm_score": course[2] or 0,
-                    "final_score": course[3] or 0,
-                    "homework_score": course[4] or 0,
-                    "time_minutes": course[5] or 0
+                    "score": course[score_idx] or 0,
+                    "midterm_score": course[midterm_idx] or 0,
+                    "final_score": course[final_idx] or 0,
+                    "homework_score": course[homework_idx] or 0,
+                    "time_minutes": course[time_idx] or 0
                 }
             
             students.append(student)
@@ -286,6 +395,130 @@ def load_students_from_sqlserver():
     
     conn.close()
     return students
+
+def load_students_from_sqlserver():
+    """Load danh sach sinh vien tu SQL Server."""
+    conn = get_connection()
+    if not conn:
+        return []
+
+    cursor = conn.cursor()
+    students = []
+
+    course_code_to_name = {
+        'NMLT': 'Nháº­p MÃ´n Láº­p TrÃ¬nh',
+        'KTLT': 'KÄ© Thuáº­t Láº­p TrÃ¬nh',
+        'CTDL': 'Cáº¥u trÃºc Dá»¯ Liá»‡u vÃ  Giáº£i Thuáº­t',
+        'OOP': 'Láº­p TrÃ¬nh HÆ°á»›ng Äá»‘i TÆ°á»£ng'
+    }
+
+    try:
+        cursor.execute("""
+            SELECT s.student_id, s.name, s.class, s.khoa, s.sex,
+                   c.total_score, c.midterm_score, c.final_score,
+                   c.attendance_rate, c.behavior_score_100,
+                   c.late_submissions, c.assignment_completion,
+                   c.study_hours_per_week, c.participation_score
+            FROM students s
+            LEFT JOIN student_csv_data c ON s.student_id = c.student_id
+        """)
+        rows = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'course_scores'
+        """)
+        course_columns = {c[0].lower() for c in cursor.fetchall()}
+        has_course_code = 'course_code' in course_columns
+        has_course_name = 'course_name' in course_columns
+
+        course_select_cols = ["student_id"]
+        code_idx = None
+        name_idx = None
+
+        if has_course_code:
+            code_idx = len(course_select_cols)
+            course_select_cols.append("course_code")
+        if has_course_name:
+            name_idx = len(course_select_cols)
+            course_select_cols.append("course_name")
+
+        score_idx = len(course_select_cols)
+        midterm_idx = score_idx + 1
+        final_idx = score_idx + 2
+        homework_idx = score_idx + 3
+        time_idx = score_idx + 4
+
+        course_select_cols.extend([
+            "score",
+            "midterm_score",
+            "final_score",
+            "homework_score",
+            "time_minutes",
+        ])
+
+        cursor.execute(f"""
+            SELECT {", ".join(course_select_cols)}
+            FROM course_scores
+        """)
+        course_rows_by_student = {}
+        for course_row in cursor.fetchall():
+            course_rows_by_student.setdefault(course_row[0], []).append(course_row)
+
+        for row in rows:
+            student = {
+                "student_id": row[0],
+                "name": row[1],
+                "class": row[2],
+                "Khoa": row[3],
+                "sex": row[4] or "KhÃ´ng rÃµ",
+                "csv_data": {
+                    "total_score": row[5] or 0,
+                    "midterm_score": row[6] or 0,
+                    "final_score": row[7] or 0,
+                    "attendance_rate": row[8] or 0,
+                    "behavior_score_100": row[9] or 50,
+                    "late_submissions": row[10] or 0,
+                    "assignment_completion": row[11] or 0,
+                    "study_hours_per_week": row[12] or 0,
+                    "participation_score": row[13] or 0,
+                    "class": row[2]
+                },
+                "courses": {}
+            }
+
+            for course in course_rows_by_student.get(row[0], []):
+                raw_course_code = course[code_idx] if code_idx is not None and len(course) > code_idx else None
+                raw_course_name = course[name_idx] if name_idx is not None and len(course) > name_idx else None
+
+                course_code = raw_course_code
+                if course_code is None or str(course_code).strip().lower() in {'', 'none', 'null', 'undefined', 'na', 'nan'}:
+                    course_code = raw_course_name
+
+                if course_code is None or str(course_code).strip().lower() in {'', 'none', 'null', 'undefined', 'na', 'nan'}:
+                    continue
+
+                course_name = course_code_to_name.get(course_code, course_code)
+                student["courses"][course_name] = {
+                    "score": course[score_idx] or 0,
+                    "midterm_score": course[midterm_idx] or 0,
+                    "final_score": course[final_idx] or 0,
+                    "homework_score": course[homework_idx] or 0,
+                    "time_minutes": course[time_idx] or 0
+                }
+
+            students.append(student)
+
+        print(f"Loaded {len(students)} students from SQL Server")
+
+    except Exception as e:
+        print(f"Load data error: {e}")
+    finally:
+        conn.close()
+
+    return students
+
 
 def save_student(student):
     """Lưu thông tin 1 sinh viên vào SQL Server"""
@@ -347,6 +580,62 @@ def save_student(student):
             csv_data.get("behavior_score_100", 50),
             csv_data.get("late_submissions", 0),
             csv_data.get("assignment_completion", 0)
+        )
+
+        # Upsert dữ liệu hành vi học tập vào student_csv_data
+        cursor.execute("""
+            MERGE INTO student_csv_data AS target
+            USING (SELECT ? AS student_id) AS source
+            ON target.student_id = source.student_id
+            WHEN MATCHED THEN
+                UPDATE SET
+                    total_score = ?,
+                    midterm_score = ?,
+                    final_score = ?,
+                    homework_score = ?,
+                    attendance_rate = ?,
+                    behavior_score_100 = ?,
+                    late_submissions = ?,
+                    assignment_completion = ?,
+                    study_hours_per_week = ?,
+                    participation_score = ?,
+                    lms_usage_hours = ?,
+                    response_quality = ?
+            WHEN NOT MATCHED THEN
+                INSERT (
+                    student_id, total_score, midterm_score, final_score, homework_score,
+                    attendance_rate, behavior_score_100, late_submissions, assignment_completion,
+                    study_hours_per_week, participation_score, lms_usage_hours, response_quality
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """,
+            student.get("student_id"),
+            csv_data.get("total_score", 0),
+            csv_data.get("midterm_score", 0),
+            csv_data.get("final_score", 0),
+            csv_data.get("homework_score", 0),
+            csv_data.get("attendance_rate", 0),
+            csv_data.get("behavior_score_100", 50),
+            csv_data.get("late_submissions", 0),
+            csv_data.get("assignment_completion", 0),
+            csv_data.get("study_hours_per_week", 0),
+            csv_data.get("participation_score", 0),
+            csv_data.get("lms_usage_hours", 0),
+            csv_data.get("response_quality", 0),
+            # Values for INSERT
+            student.get("student_id"),
+            csv_data.get("total_score", 0),
+            csv_data.get("midterm_score", 0),
+            csv_data.get("final_score", 0),
+            csv_data.get("homework_score", 0),
+            csv_data.get("attendance_rate", 0),
+            csv_data.get("behavior_score_100", 50),
+            csv_data.get("late_submissions", 0),
+            csv_data.get("assignment_completion", 0),
+            csv_data.get("study_hours_per_week", 0),
+            csv_data.get("participation_score", 0),
+            csv_data.get("lms_usage_hours", 0),
+            csv_data.get("response_quality", 0)
         )
         
         # Lưu điểm các môn học

@@ -35,6 +35,20 @@ create table if not exists public.course_scores (
   homework_score double precision default 0
 );
 
+create table if not exists public.skill_evaluations (
+  id bigserial primary key,
+  student_id integer references public.students(student_id) on delete cascade,
+  course_code varchar(10),
+  skill_code varchar(20),
+  score double precision default 0,
+  level varchar(20),
+  passed boolean default false,
+  unique(student_id, course_code, skill_code)
+);
+
+create index if not exists idx_skill_evaluations_student on public.skill_evaluations(student_id);
+create index if not exists idx_skill_evaluations_course on public.skill_evaluations(course_code);
+
 create table if not exists public.classifications (
   student_id integer primary key references public.students(student_id) on delete cascade,
   kmeans_prediction varchar(50),

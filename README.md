@@ -63,6 +63,17 @@ python app.py
 
 Server chạy tại: **http://localhost:5000**
 
+### 4. Tạo dữ liệu mẫu cho KMeans + KNN
+```bash
+python scripts/seed_sample_students_for_kmeans_knn.py --count 300
+```
+
+Tuỳ chọn:
+- `--count`: số lượng sinh viên mẫu
+- `--seed`: random seed
+- `--sync-supabase`: đồng bộ thêm lên Supabase
+- `--replace`: xóa dữ liệu cũ trước khi tạo dữ liệu mẫu mới
+
 ## 📡 API Endpoints
 
 | Method | Endpoint | Mô tả |

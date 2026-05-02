@@ -9,8 +9,10 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from sqlserver_sync import load_students_from_sqlserver, save_classification
+from supabase_sync import sync_all_to_supabase
 from student_classifier import StudentClassifier
 from skill_evaluator import SkillEvaluator
+from integrated_scoring_system import IntegratedScoringSystem
 
 classify_bp = Blueprint('classify', __name__)
 
@@ -51,14 +53,15 @@ def classify_students():
         classifier.fit(students)
         classified_students = classifier.predict(students)
         
-        # Tính điểm tích hợp
-        integrated_system = data_store.get('integrated_system')
-        integrated_results = integrated_system.analyze_all_students() if integrated_system else []
+        # Tính điểm tích hợp từ SQL Server
+        integrated_system = IntegratedScoringSystem(students)
+        integrated_results = integrated_system.analyze_all_students()
         
         # Cập nhật data store
         data_store['students'] = students
         data_store['classifications'] = classified_students
         data_store['skill_evaluations'] = skill_evaluations
+        data_store['integrated_system'] = integrated_system
         data_store['integrated_results'] = integrated_results
         
         # Lưu vào SQL Server
@@ -72,6 +75,14 @@ def classify_students():
                 'success': False,
                 'error': 'Phân loại xong nhưng không lưu được kết quả vào SQL Server'
             }), 500
+
+        # Đồng bộ thêm lên Supabase (best-effort, không ảnh hưởng luồng SQL chính)
+        supabase_sync = {'success': False, 'error': None, 'stats': {}}
+        try:
+            supabase_stats = sync_all_to_supabase(students, classified_students, integrated_results)
+            supabase_sync = {'success': True, 'error': None, 'stats': supabase_stats}
+        except Exception as supabase_error:
+            supabase_sync = {'success': False, 'error': str(supabase_error), 'stats': {}}
         
         # Thống kê
         level_counts = {"Xuat sac": 0, "Kha": 0, "Trung binh": 0, "Yeu": 0}
@@ -91,6 +102,7 @@ def classify_students():
                 'saved': saved_count,
                 'total': len(classified_students)
             },
+            'supabase_sync': supabase_sync,
             'statistics': {
                 'total': len(classified_students),
                 'level_counts': level_counts,

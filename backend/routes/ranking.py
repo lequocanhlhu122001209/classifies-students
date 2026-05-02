@@ -14,6 +14,35 @@ ranking_bp = Blueprint('ranking', __name__)
 
 data_store = {}
 
+COURSE_NAME_TO_CODE = {
+    'Nhập Môn Lập Trình': 'NMLT',
+    'Kĩ Thuật Lập Trình': 'KTLT',
+    'Cấu trúc Dữ Liệu và Giải Thuật': 'CTDL',
+    'Lập Trình Hướng Đối Tượng': 'OOP',
+    'NMLT': 'NMLT',
+    'KTLT': 'KTLT',
+    'CTDL': 'CTDL',
+    'OOP': 'OOP',
+}
+
+
+def _course_aliases(course_name):
+    aliases = {course_name}
+    code = COURSE_NAME_TO_CODE.get(course_name)
+    if code:
+        aliases.add(code)
+    return aliases
+
+
+def _normalized_course_keys(courses):
+    normalized = set()
+    for course_name in courses.keys():
+        normalized.add(course_name)
+        code = COURSE_NAME_TO_CODE.get(course_name)
+        if code:
+            normalized.add(code)
+    return normalized
+
 def init_data_store(store):
     global data_store
     data_store = store
@@ -27,10 +56,13 @@ def get_best_skills(student_id, skill_evaluations, courses):
     course_scores = {}
     
     for course_name, course_data in courses.items():
-        course_scores[course_name] = course_data.get('score', 0)
+        course_code = COURSE_NAME_TO_CODE.get(course_name, course_name)
+        score = course_data.get('score', 0)
+        course_scores[course_name] = score
+        course_scores[course_code] = score
         
         # Lấy kỹ năng của môn này
-        course_skills = student_skills.get(course_name, {})
+        course_skills = student_skills.get(course_name, {}) or student_skills.get(course_code, {})
         if course_skills:
             # Tìm kỹ năng có điểm cao nhất
             best_skill = max(course_skills.items(), key=lambda x: x[1].get('score', 0) if isinstance(x[1], dict) else 0)
@@ -41,6 +73,7 @@ def get_best_skills(student_id, skill_evaluations, courses):
                 'score': round(skill_data.get('score', 0), 1),
                 'level': skill_data.get('level', 'N/A')
             }
+            best_skills[course_code] = best_skills[course_name]
     
     return best_skills, course_scores
 
@@ -81,7 +114,7 @@ def get_top_students():
         avg_score = sum(scores) / len(scores) if scores else 0
         
         # Nếu lọc theo môn, chỉ lọc sinh viên có môn đó (không thay đổi avg_score)
-        if course and course not in courses:
+        if course and course not in _normalized_course_keys(courses):
             continue
         
         # Điểm số: 0-10 -> 0-50 điểm
@@ -129,6 +162,10 @@ def get_top_students():
             final_level = 'Kha'
         else:
             final_level = 'Xuat sac'
+
+        # Rule chống gian lận: điểm cao nhưng thời gian học thấp không thể Xuất sắc.
+        if avg_score >= 8.0 and time_hours < 5 and final_level == 'Xuat sac':
+            final_level = 'Kha'
         
         # Lấy kỹ năng tốt nhất
         best_skills, course_scores = get_best_skills(student_id, skill_evaluations, courses)

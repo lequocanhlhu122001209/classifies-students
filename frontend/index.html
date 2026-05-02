@@ -83,30 +83,46 @@
         }
         
         // Hàm phân tích vấn đề của sinh viên (dùng chung cho tất cả các phần)
-        function analyzeStudentIssues(student) {
+        function analyzeStudentIssues(student, options = {}) {
+            const includeServerReasons = options.includeServerReasons === true;
             const courses = student.courses || {};
             const csvData = student.csv_data || {};
+            const serverAnomaly = Boolean(student.anomaly_detected);
             
             const courseValues = Object.values(courses);
-            const avgScore = courseValues.reduce((sum, c) => sum + (c.score || 0), 0) / (courseValues.length || 1);
-            const totalTime = courseValues.reduce((sum, c) => sum + (c.time_minutes || 0), 0);
+            const parsedScores = courseValues
+                .map(c => parseNumeric(c?.score ?? c?.total_score ?? c?.avg_score ?? c?.course_score))
+                .filter(Number.isFinite);
+            const avgScore = parsedScores.length > 0
+                ? parsedScores.reduce((sum, s) => sum + s, 0) / parsedScores.length
+                : 0;
+
+            const parsedTimes = courseValues
+                .map(c => parseNumeric(c?.time_minutes ?? c?.avg_time_minutes ?? c?.time))
+                .filter(Number.isFinite);
+            const totalTime = parsedTimes.length > 0
+                ? parsedTimes.reduce((sum, t) => sum + t, 0)
+                : 0;
             const timeInHours = totalTime / 60;
             const attendance = parseFloat(csvData.attendance_rate || 0) * 100;
             const lateSubmissions = parseInt(csvData.late_submissions || 0);
             
             // Tính thời gian trung bình mỗi môn
-            const avgTimePerCourse = courseValues.length > 0 ? totalTime / courseValues.length : 0;
+            const avgTimePerCourse = parsedTimes.length > 0 ? totalTime / parsedTimes.length : 0;
             const avgTimePerCourseHours = avgTimePerCourse / 60;
             
-            const courseScores = courseValues.map(c => c.score || 0);
+            const courseScores = parsedScores;
             const scoreStdDev = courseScores.length > 0 ? 
                 Math.sqrt(courseScores.reduce((sum, s) => sum + Math.pow(s - avgScore, 2), 0) / courseScores.length) : 0;
             
             let issues = [];
-            let hasAnomaly = student.anomaly_detected || false;
+            let hasAnomaly = serverAnomaly;
             
             // === 0. KIỂM TRA MÔN ĐIỂM 0 (cần học lại) ===
-            const zeroScoreCourses = Object.entries(courses).filter(([name, course]) => (course.score || 0) === 0);
+            const zeroScoreCourses = Object.entries(courses).filter(([name, course]) => {
+                const score = parseNumeric(course?.score ?? course?.total_score ?? course?.avg_score ?? course?.course_score);
+                return Number.isFinite(score) && score === 0;
+            });
             if (zeroScoreCourses.length > 0) {
                 const courseNames = zeroScoreCourses.map(([name]) => name).join(', ');
                 issues.push({ 
@@ -151,23 +167,25 @@
             
             // Kiểm tra từng môn có thời gian bất thường
             courseValues.forEach((course, idx) => {
-                const courseTime = course.time_minutes || 0;
-                const courseTimeHours = courseTime / 60;
-                const courseScore = course.score || 0;
+                const courseTime = parseNumeric(course?.time_minutes ?? course?.avg_time_minutes ?? course?.time);
+                const courseTimeHours = Number.isFinite(courseTime) ? courseTime / 60 : 0;
+                const courseScore = parseNumeric(course?.score ?? course?.total_score ?? course?.avg_score ?? course?.course_score);
                 const courseName = Object.keys(courses)[idx] || `Môn ${idx+1}`;
+                const hasValidTime = Number.isFinite(courseTime) && courseTime > 0;
+                const hasValidScore = Number.isFinite(courseScore);
                 
                 // Thời gian > 20h cho 1 môn là bất thường
-                if (courseTimeHours > 20) {
+                if (hasValidTime && courseTimeHours > 20) {
                     issues.push({ text: `${courseName}: ${courseTimeHours.toFixed(1)}h (bất thường - nghi treo thời gian)`, severity: 'high', points: 8, type: 'anomaly' });
                     hasAnomaly = true;
                 }
                 // Thời gian > 10h nhưng điểm thấp
-                else if (courseTimeHours > 10 && courseScore < 5.0) {
+                else if (hasValidTime && hasValidScore && courseTimeHours > 10 && courseScore < 5.0) {
                     issues.push({ text: `${courseName}: ${courseTimeHours.toFixed(1)}h nhưng điểm chỉ ${courseScore.toFixed(1)} (nghi treo thời gian)`, severity: 'high', points: 6, type: 'anomaly' });
                     hasAnomaly = true;
                 }
                 // Thời gian rất ngắn nhưng điểm cao
-                else if (courseTimeHours < 0.5 && courseScore >= 8.0) {
+                else if (hasValidTime && hasValidScore && courseTimeHours < 0.5 && courseScore >= 8.0) {
                     issues.push({ text: `${courseName}: Điểm ${courseScore.toFixed(1)} chỉ với ${Math.round(courseTime)}m (nghi gian lận)`, severity: 'high', points: 8, type: 'anomaly' });
                     hasAnomaly = true;
                 }
@@ -213,22 +231,47 @@
             }
             
             // === 8. Điểm tăng đột ngột ===
-            const midtermScore = parseFloat(csvData.midterm_score || 0);
-            if (midtermScore < 4.0 && avgScore >= 9.5) {
-                issues.push({ text: `Điểm tăng đột ngột (giữa kỳ ${midtermScore.toFixed(1)} → bài tập ${avgScore.toFixed(1)})`, severity: 'critical', points: 15, type: 'anomaly' });
+            // Chỉ cảnh báo khi thực sự có dữ liệu giữa kỳ, tránh hiểu nhầm "thiếu dữ liệu" thành 0.
+            const rawMidterm = csvData.midterm_score;
+            const midtermFromCsv = parseNumeric(rawMidterm);
+            const courseMidtermValues = courseValues
+                .map(c => parseNumeric(c?.midterm_score))
+                .filter(Number.isFinite);
+            const hasMidtermData = (
+                (rawMidterm !== undefined && rawMidterm !== null && `${rawMidterm}`.trim() !== '')
+                || courseMidtermValues.length > 0
+            );
+            const midtermScore = Number.isFinite(midtermFromCsv)
+                ? midtermFromCsv
+                : (courseMidtermValues.length > 0
+                    ? courseMidtermValues.reduce((sum, v) => sum + v, 0) / courseMidtermValues.length
+                    : NaN);
+
+            if (hasMidtermData && Number.isFinite(midtermScore) && midtermScore < 4.0 && avgScore >= 9.5) {
+                issues.push({ text: `Điểm tăng đột ngột (điểm giữa kỳ tổng hợp ${midtermScore.toFixed(1)} → điểm hiện tại ${avgScore.toFixed(1)})`, severity: 'critical', points: 15, type: 'anomaly' });
                 hasAnomaly = true;
             }
             
-            // Thêm lý do từ server nếu có (anomaly_reasons là array)
-            const serverReasons = student.anomaly_reasons || [];
-            if (Array.isArray(serverReasons)) {
-                serverReasons.forEach(reason => {
-                    if (reason && !issues.some(i => i.text.includes(reason.substring(0, 20)))) {
-                        issues.push({ text: reason, severity: 'high', points: 10 });
-                    }
-                });
-            } else if (student.anomaly_reason && !issues.some(i => i.text === student.anomaly_reason)) {
-                issues.push({ text: student.anomaly_reason, severity: 'high', points: 10 });
+            // Chỉ dùng lý do từ server khi cần hiển thị tham khảo, không dùng để quyết định lọc bất thường.
+            if (includeServerReasons) {
+                const serverReasons = student.anomaly_reasons || [];
+                if (Array.isArray(serverReasons)) {
+                    serverReasons.forEach(reason => {
+                        if (reason && !issues.some(i => i.text.includes(reason.substring(0, 20)))) {
+                            issues.push({ text: reason, severity: 'high', points: 0, type: serverAnomaly ? 'anomaly' : 'warning' });
+                        }
+                    });
+                } else if (student.anomaly_reason && !issues.some(i => i.text === student.anomaly_reason)) {
+                    issues.push({ text: student.anomaly_reason, severity: 'high', points: 0, type: serverAnomaly ? 'anomaly' : 'warning' });
+                }
+            }
+
+            if (serverAnomaly && !includeServerReasons && !issues.some(i => i.type === 'anomaly')) {
+                issues.push({ text: 'Server da danh dau sinh vien nay la bat thuong', severity: 'high', points: 0, type: 'anomaly' });
+            }
+
+            if (serverAnomaly || issues.some(i => i.type === 'anomaly')) {
+                hasAnomaly = true;
             }
             
             // Lấy behavior từ csv_data
@@ -238,7 +281,7 @@
                 issues: issues,
                 hasAnomaly: hasAnomaly,
                 totalPenalty: issues.reduce((sum, i) => sum + i.points, 0),
-                stats: { avgScore, timeInHours, totalTime, attendance, lateSubmissions, scoreStdDev, midtermScore, behavior, avgTimePerCourseHours }
+                stats: { avgScore, timeInHours, totalTime, attendance, lateSubmissions, scoreStdDev, midtermScore: (Number.isFinite(midtermScore) ? midtermScore : null), behavior, avgTimePerCourseHours }
             };
         }
         
@@ -340,26 +383,14 @@
         }
         
         // Hàm giải thích level
-        // Hàm tính level dựa trên K-means/KNN + điều chỉnh theo hành vi
-        // Logic: Dùng final_level từ server, nhưng điểm < 5 = Yếu bắt buộc
-        // Nếu có môn nào điểm = 0 → Yếu bắt buộc
+        // Mục tiêu dự án: phân loại do backend KMeans + KNN quyết định.
+        // Frontend chỉ hiển thị kết quả final_level từ server để tránh lệch mô hình.
         function calculateStudentLevel(student) {
             const courses = student.courses || {};
             const courseCount = Object.keys(courses).length;
             if (courseCount === 0) return 'Yeu';
-            
-            // Kiểm tra có môn nào điểm = 0 không
-            const zeroScoreCourses = Object.entries(courses).filter(([name, course]) => (course.score || 0) === 0);
-            if (zeroScoreCourses.length > 0) {
-                return 'Yeu'; // Có môn điểm 0 → Yếu bắt buộc
-            }
-            
-            const avgScore = Object.values(courses).reduce((sum, course) => sum + (course.score || 0), 0) / courseCount;
-            
-            // Điểm < 5 = Yếu bắt buộc (dù hành vi tốt)
-            if (avgScore < 5.0) return 'Yeu';
-            
-            // Lấy level từ K-means/KNN (đã xét hành vi)
+
+            // Lấy level từ K-means/KNN (nguồn chính)
             let level = student.final_level;
             if (level) {
                 // Chuẩn hóa về format không dấu
@@ -370,35 +401,21 @@
                     'Yếu': 'Yeu'
                 };
                 level = levelMap[level] || level;
+                if (['Xuat sac', 'Kha', 'Trung binh', 'Yeu'].includes(level)) {
+                    return level;
+                }
             }
-            
-            // Nếu không có từ server, tính dựa trên điểm + hành vi
+
+            // Fallback tối thiểu chỉ khi chưa có final_level từ server.
             if (!level) {
-                const csvData = student.csv_data || {};
-                const attendance = parseFloat(csvData.attendance_rate || 0) * 100;
-                const lateSubmissions = parseInt(csvData.late_submissions || 0);
+                const avgScore = Object.values(courses).reduce((sum, course) => sum + (course.score || 0), 0) / courseCount;
                 
-                // Xếp loại cơ bản theo điểm
                 if (avgScore >= 8.0) level = 'Xuat sac';
                 else if (avgScore >= 7.0) level = 'Kha';
                 else if (avgScore >= 5.0) level = 'Trung binh';
                 else level = 'Yeu';
-                
-                // Hạ bậc nếu hành vi kém
-                // Nộp trễ >= 15 lần hoặc vắng > 30% → hạ 1 bậc
-                if (lateSubmissions >= 15 || attendance < 70) {
-                    if (level === 'Xuat sac') level = 'Kha';
-                    else if (level === 'Kha') level = 'Trung binh';
-                    else if (level === 'Trung binh') level = 'Yeu';
-                }
-                // Nộp trễ >= 25 lần hoặc vắng > 50% → hạ thêm 1 bậc
-                if (lateSubmissions >= 25 || attendance < 50) {
-                    if (level === 'Xuat sac') level = 'Kha';
-                    else if (level === 'Kha') level = 'Trung binh';
-                    else if (level === 'Trung binh') level = 'Yeu';
-                }
             }
-            
+
             return level;
         }
         
@@ -1663,7 +1680,8 @@
                           `• Điểm môn học: ${result.stats?.course_scores || 0}\n` +
                           `• Đánh giá kỹ năng: ${result.stats?.skill_evaluations || 0}\n` +
                           `• Phân loại: ${result.stats?.classifications || 0}\n` +
-                          `• Điểm tích hợp: ${result.stats?.integrated_scores || 0}`);
+                          `• Điểm tích hợp: ${result.stats?.integrated_scores || 0}\n` +
+                          `• Bất thường: ${result.stats?.anomalies || 0}`);
                 } else {
                     alert('❌ Lỗi khi lưu: ' + (result.error || 'Unknown error'));
                 }
@@ -2292,11 +2310,6 @@
                 window.studentsData = allStudents; // Lưu vào global để dùng cho updateScoreTable
                 skillEvaluations = studentsData.skill_evaluations || {};
                 
-                // Debug: kiểm tra anomaly_detected
-                const anomalyStudents = allStudents.filter(s => s.anomaly_detected);
-                console.log('Total students:', allStudents.length);
-                console.log('Anomaly students:', anomalyStudents.length);
-                
                 // Cập nhật danh sách lớp và môn học
                 updateClassFilter();
                 updateCourseFilter();
@@ -2461,11 +2474,7 @@
 
         // Hàm lọc sinh viên theo level
         function filterStudentsByLevel(level) {
-            console.log('=== filterStudentsByLevel called ===');
-            console.log('Filter level:', level);
-            
             if (!allStudents || allStudents.length === 0) {
-                console.log('No students available');
                 return;
             }
             
@@ -2485,16 +2494,10 @@
                 filteredStudents = allStudents.filter(s => {
                     const studentLevel = calculateStudentLevel(s);
                     const match = studentLevel === level;
-                    if (!match && level === 'Yeu') {
-                        console.log('Student:', s.name, '| Level:', studentLevel, '| Expected:', level, '| Match:', match);
-                    }
                     return match;
                 });
             }
-            
-            console.log('Total students:', allStudents.length);
-            console.log('Filtered students count:', filteredStudents.length);
-            
+
             // Render lại danh sách sinh viên đã lọc
             renderStudentList(filteredStudents);
             
@@ -2509,12 +2512,8 @@
 
         // Render danh sách sinh viên (bảng) vào #studentsList
         function renderStudentList(students) {
-            console.log('=== renderStudentList called ===');
-            console.log('Students to render:', students ? students.length : 0);
-            
             const container = document.getElementById('studentsList');
             if (!container) {
-                console.log('Container not found!');
                 return;
             }
             // remember last rendered for download/toggle
@@ -3207,8 +3206,11 @@
                     const studentId = student.student_id;
                     const finalLevel = student.final_level || 'Unknown';
                     const levelClass = finalLevel.toLowerCase().replace(' ', '-');
-                    const courseData = student.courses[courseName];
-                    const skillEval = skillEvaluations[studentId]?.[courseName];
+                    const canonicalCourseMap = buildCanonicalCourseMap(student);
+                    const canonicalSkillMap = buildCanonicalSkillMap(skillEvaluations[studentId] || student.skill_evaluations || {});
+                    const courseData = canonicalCourseMap[courseName] || getCourseDataByCanonical(student, courseName);
+                    const skillEval = canonicalSkillMap[courseName] || skillEvaluations[studentId]?.[courseName];
+                    const liveAnalysis = analyzeStudentIssues(student);
 
                     let skillsHtml = '';
                     if (skillEval && skillEval.skills) {
@@ -3235,9 +3237,9 @@
                             <h3>${student.name || `Sinh viên ${studentId}`}</h3>
                             <span class="level ${levelClass}">${levelNames[finalLevel] || finalLevel}</span>
                             
-                            ${student.anomaly_detected ? `
+                            ${liveAnalysis.hasAnomaly ? `
                                 <div class="anomaly">
-                                    ⚠️ ${student.anomaly_reason || 'Phát hiện bất thường'}
+                                    ⚠️ ${(liveAnalysis.issues || []).slice(0, 1).map(i => i.text).join('') || 'Phát hiện bất thường'}
                                 </div>
                             ` : ''}
                             
@@ -4576,11 +4578,6 @@
         window.showCourseStatsModal = showCourseStatsModal;
         window.showClassCompareModal = showClassCompareModal;
 
-        // Tu dong load khi trang duoc mo
-        window.onload = () => {
-            loadStudents();
-        };
-        
         // Dong menu khi click ra ngoai
         document.addEventListener('click', function(e) {
             const reportMenu = document.getElementById('reportMenu');

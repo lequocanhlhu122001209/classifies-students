@@ -11,6 +11,7 @@ from student_classifier import StudentClassifier
 from skill_evaluator import SkillEvaluator
 from integrated_scoring_system import IntegratedScoringSystem
 from sqlserver_sync import save_classification
+from supabase_sync import sync_all_to_supabase
 
 
 def ensure_classifications(data_store):
@@ -58,6 +59,13 @@ def ensure_classifications(data_store):
         print(f"  ⚠️ Lưu SQL: {saved_count}/{len(classified_students)} bản ghi")
     else:
         print(f"  ✅ Lưu SQL: {saved_count}/{len(classified_students)} bản ghi")
+
+    # Đồng bộ classifications sang Supabase để giữ dữ liệu ở cả 2 nơi
+    try:
+        sync_all_to_supabase(students, classified_students, data_store.get('integrated_results', []))
+        print("  ✅ Đã đồng bộ classifications lên Supabase")
+    except Exception as supabase_error:
+        print(f"  ⚠️ Đồng bộ Supabase thất bại: {supabase_error}")
     
     print(f"  ✅ Đã phân loại {len(classified_students)} sinh viên")
     
@@ -80,7 +88,7 @@ def ensure_integrated_scores(data_store):
         not data_store.get('integrated_system')
         or len(getattr(data_store.get('integrated_system'), 'students_data', {})) == 0
     ):
-        data_store['integrated_system'] = IntegratedScoringSystem()
+        data_store['integrated_system'] = IntegratedScoringSystem(data_store.get('students', []))
     
     # Tính điểm
     integrated_results = data_store['integrated_system'].analyze_all_students()

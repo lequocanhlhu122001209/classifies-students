@@ -679,6 +679,18 @@ class StudentClassifier:
             # Tính điểm trung bình từ các môn học
             course_scores = [float(c.get("score", 0)) for c in courses.values() if isinstance(c, dict)]
             avg_course_score = sum(course_scores) / len(course_scores) if course_scores else total_score
+
+            # Kiểm tra lại trong phase dự đoán để tránh phụ thuộc biến ngoài scope.
+            course_midterms = [float(c.get("midterm_score", 0)) for c in courses.values() if isinstance(c, dict)]
+            course_finals = [float(c.get("final_score", 0)) for c in courses.values() if isinstance(c, dict)]
+            course_homeworks = [float(c.get("homework_score", 0)) for c in courses.values() if isinstance(c, dict)]
+            has_zero_score = any(s == 0 for s in course_scores + course_midterms + course_finals + course_homeworks)
+            zero_score_reason = []
+            if has_zero_score:
+                for idx, score in enumerate(course_scores):
+                    if score == 0:
+                        course_name = list(courses.keys())[idx] if idx < len(courses) else f"Môn {idx+1}"
+                        zero_score_reason.append(f"Điểm môn {course_name} = 0")
             
             # Tính thời gian theo giờ
             time_hours = total_time / 60
@@ -702,6 +714,10 @@ class StudentClassifier:
                 anomaly_detected = True
                 anomaly_severity = max(anomaly_severity, 3)
                 anomaly_reasons.append(f"Điểm {avg_course_score:.1f}/10 nhưng thời gian chỉ {time_hours:.1f}h (đáng nghi)")
+            elif avg_course_score >= 7.0 and time_hours < 2:
+                anomaly_detected = True
+                anomaly_severity = max(anomaly_severity, 2)
+                anomaly_reasons.append(f"Điểm {avg_course_score:.1f}/10 nhưng thời gian quá ngắn {time_hours:.1f}h (nghi gian lận)")
             # MỚI: Phát hiện dựa trên tỷ lệ hiệu quả bất thường
             elif avg_course_score >= 8.0 and efficiency_ratio > 1.5:
                 anomaly_detected = True
@@ -786,6 +802,24 @@ class StudentClassifier:
                     new_idx = min(current_idx + 1, 3)
                 
                 final_level = level_order[new_idx]
+
+            # Rule khóa cứng: điểm cao nhưng thời gian học thấp không thể xếp Xuất sắc.
+            if avg_course_score >= 8.0 and time_hours < 5 and final_level == "Xuat sac":
+                final_level = "Kha"
+                anomaly_detected = True
+                anomaly_severity = max(anomaly_severity, 2)
+                cap_reason = f"Điểm cao ({avg_course_score:.1f}/10) nhưng thời gian học thấp ({time_hours:.1f}h) - không thể xếp Xuất sắc"
+                if cap_reason not in anomaly_reasons:
+                    anomaly_reasons.append(cap_reason)
+
+            # Rule khóa cứng mức mạnh hơn: điểm khá/giỏi nhưng thời gian quá ngắn thì tối đa Trung bình.
+            if avg_course_score >= 7.0 and time_hours < 2 and final_level in ["Xuat sac", "Kha"]:
+                final_level = "Trung binh"
+                anomaly_detected = True
+                anomaly_severity = max(anomaly_severity, 3)
+                hard_cap_reason = f"Điểm {avg_course_score:.1f}/10 nhưng thời gian chỉ {time_hours:.1f}h - hạ tối đa xuống Trung bình"
+                if hard_cap_reason not in anomaly_reasons:
+                    anomaly_reasons.append(hard_cap_reason)
             
             valid_results.append({
                 **student,

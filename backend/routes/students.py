@@ -87,7 +87,7 @@ def get_student_detail(student_id):
     integrated_system = data_store.get('integrated_system')
     if not integrated_system:
         from integrated_scoring_system import IntegratedScoringSystem
-        integrated_system = IntegratedScoringSystem()
+        integrated_system = IntegratedScoringSystem(data_store.get('students', []))
         data_store['integrated_system'] = integrated_system
     
     integrated_data = integrated_system.calculate_integrated_score(student_id)
